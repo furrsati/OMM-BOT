@@ -87,8 +87,8 @@ router.get(
         bot: {
           isRunning: ctx.isRunning,
           isPaused: ctx.isPaused,
-          tradingEnabled: process.env.ENABLE_TRADING === 'true',
-          paperTradingMode: process.env.PAPER_TRADING_MODE === 'true',
+          tradingEnabled: botContextManager.isTradingEnabled(),
+          paperTradingMode: botContextManager.isPaperTradingMode(),
           uptime: Math.floor((Date.now() - ctx.startTime.getTime()) / 1000),
           startTime: ctx.startTime.toISOString(),
         },
@@ -156,8 +156,8 @@ router.get(
         },
         environment: {
           nodeEnv: process.env.NODE_ENV || 'development',
-          tradingEnabled: process.env.ENABLE_TRADING === 'true',
-          paperTradingMode: process.env.PAPER_TRADING_MODE === 'true',
+          tradingEnabled: botContextManager.isTradingEnabled(),
+          paperTradingMode: botContextManager.isPaperTradingMode(),
         },
       },
     });

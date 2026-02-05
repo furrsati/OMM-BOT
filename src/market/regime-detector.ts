@@ -41,6 +41,7 @@ export class RegimeDetector {
   private currentRegime: RegimeState;
   private isRunning: boolean = false;
   private updateIntervalMs: number = 60000; // 1 minute
+  private manualOverride: MarketRegime | null = null;
 
   constructor() {
     this.currentRegime = {
@@ -86,6 +87,10 @@ export class RegimeDetector {
    * Get current market regime
    */
   getRegime(): MarketRegime {
+    // Manual override takes precedence
+    if (this.manualOverride) {
+      return this.manualOverride;
+    }
     return this.currentRegime.regime;
   }
 
@@ -93,7 +98,38 @@ export class RegimeDetector {
    * Get full regime state
    */
   getRegimeState(): RegimeState {
+    // If manual override is set, return modified state
+    if (this.manualOverride) {
+      return {
+        ...this.currentRegime,
+        regime: this.manualOverride,
+        reason: `Manual override: ${this.manualOverride}`
+      };
+    }
     return this.currentRegime;
+  }
+
+  /**
+   * Set manual regime override (from dashboard)
+   */
+  setManualOverride(regime: MarketRegime | null): void {
+    this.manualOverride = regime;
+    logger.info(`Market regime override ${regime ? `set to: ${regime}` : 'cleared'}`);
+  }
+
+  /**
+   * Clear manual override (return to automatic detection)
+   */
+  clearManualOverride(): void {
+    this.manualOverride = null;
+    logger.info('Market regime override cleared, returning to automatic detection');
+  }
+
+  /**
+   * Check if manual override is active
+   */
+  isOverrideActive(): boolean {
+    return this.manualOverride !== null;
   }
 
   /**

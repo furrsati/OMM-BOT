@@ -6,6 +6,7 @@ import metricsRoutes from './metrics.routes';
 import controlsRoutes from './controls.routes';
 import learningRoutes from './learning.routes';
 import marketRoutes from './market.routes';
+import botRoutes from './bot.routes';
 
 const router = Router();
 
@@ -17,5 +18,6 @@ router.use('/metrics', metricsRoutes);
 router.use('/controls', controlsRoutes);
 router.use('/learning', learningRoutes);
 router.use('/market', marketRoutes);
+router.use('/bot', botRoutes);
 
 export default router;

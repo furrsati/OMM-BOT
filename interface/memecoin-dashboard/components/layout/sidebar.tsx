@@ -14,20 +14,22 @@ import {
   Bell,
   Settings,
   BarChart3,
-  Power
+  Power,
+  FileText
 } from "lucide-react"
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
+  { name: "Controls", href: "/controls", icon: Power },
   { name: "Positions", href: "/positions", icon: TrendingUp },
-  { name: "Wallet", href: "/wallet", icon: Wallet },
-  { name: "Execution", href: "/execution", icon: Activity },
   { name: "Trades", href: "/trades", icon: BarChart3 },
+  { name: "Wallet", href: "/wallet", icon: Wallet },
   { name: "Smart Wallets", href: "/wallets", icon: Users },
+  { name: "Execution", href: "/execution", icon: Activity },
   { name: "Learning Engine", href: "/learning", icon: Brain },
   { name: "Safety", href: "/safety", icon: Shield },
   { name: "Alerts", href: "/alerts", icon: Bell },
-  { name: "Controls", href: "/controls", icon: Power },
+  { name: "Logs", href: "/logs", icon: FileText },
   { name: "Settings", href: "/settings", icon: Settings },
 ]
 

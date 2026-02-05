@@ -33,6 +33,10 @@ export interface BotContext {
   startTime: Date;
   isRunning: boolean;
   isPaused: boolean;
+
+  // Trading Mode (runtime overridable)
+  paperTradingMode: boolean;
+  tradingEnabled: boolean;
 }
 
 class BotContextManager {
@@ -77,10 +81,24 @@ class BotContextManager {
   /**
    * Update bot state
    */
-  updateState(updates: Partial<Pick<BotContext, 'isRunning' | 'isPaused'>>): void {
+  updateState(updates: Partial<Pick<BotContext, 'isRunning' | 'isPaused' | 'paperTradingMode' | 'tradingEnabled'>>): void {
     if (this.context) {
       Object.assign(this.context, updates);
     }
+  }
+
+  /**
+   * Check if paper trading mode is active
+   */
+  isPaperTradingMode(): boolean {
+    return this.context?.paperTradingMode ?? process.env.PAPER_TRADING_MODE === 'true';
+  }
+
+  /**
+   * Check if trading is enabled
+   */
+  isTradingEnabled(): boolean {
+    return this.context?.tradingEnabled ?? process.env.ENABLE_TRADING === 'true';
   }
 }
 

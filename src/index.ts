@@ -547,6 +547,8 @@ async function main() {
       startTime: new Date(),
       isRunning: true,
       isPaused: false,
+      paperTradingMode: process.env.PAPER_TRADING_MODE === 'true',
+      tradingEnabled: process.env.ENABLE_TRADING === 'true',
     });
     logger.info('✅ Bot context initialized');
 
