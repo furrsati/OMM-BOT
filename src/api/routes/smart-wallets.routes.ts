@@ -14,7 +14,7 @@ router.get(
     const result = await getPool().query(
       `SELECT
         id,
-        wallet_address,
+        address,
         tier,
         score,
         win_rate,
@@ -24,7 +24,6 @@ router.get(
         is_active,
         is_crowded,
         notes,
-        metrics,
         created_at
       FROM smart_wallets
       WHERE is_active = true
@@ -33,7 +32,7 @@ router.get(
 
     const wallets = result.rows.map((row) => ({
       id: row.id,
-      address: row.wallet_address,
+      address: row.address,
       tier: row.tier,
       score: parseFloat(row.score) || 0,
       winRate: parseFloat(row.win_rate) || 0,
@@ -78,7 +77,7 @@ router.get(
     const row = result.rows[0];
     const wallet = {
       id: row.id,
-      address: row.wallet_address,
+      address: row.address,
       tier: row.tier,
       score: parseFloat(row.score) || 0,
       winRate: parseFloat(row.win_rate) || 0,
@@ -117,7 +116,7 @@ router.post(
 
     // Check if wallet already exists
     const existing = await getPool().query(
-      `SELECT id FROM smart_wallets WHERE wallet_address = $1`,
+      `SELECT id FROM smart_wallets WHERE address = $1`,
       [address]
     );
 
@@ -130,10 +129,10 @@ router.post(
     }
 
     const result = await getPool().query(
-      `INSERT INTO smart_wallets (wallet_address, tier, notes, metrics)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, wallet_address, tier, score, created_at`,
-      [address, tier, notes || null, JSON.stringify({})]
+      `INSERT INTO smart_wallets (address, tier, notes)
+       VALUES ($1, $2, $3)
+       RETURNING id, address, tier, score, created_at`,
+      [address, tier, notes || null]
     );
 
     const row = result.rows[0];
@@ -141,7 +140,7 @@ router.post(
       success: true,
       data: {
         id: row.id,
-        address: row.wallet_address,
+        address: row.address,
         tier: row.tier,
         score: 0,
         addedAt: row.created_at,

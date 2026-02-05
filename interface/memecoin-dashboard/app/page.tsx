@@ -73,16 +73,29 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [backendUrl, setBackendUrl] = useState<string | null>(null);
+
   useEffect(() => {
     const fetchStats = async () => {
       try {
         const response = await fetch(`${API_URL}/status`);
-        if (!response.ok) throw new Error('Failed to fetch');
         const data = await response.json();
+
+        if (data.isOffline) {
+          // Backend is offline - show the error with backend URL
+          setBackendUrl(data.backendUrl || null);
+          throw new Error(data.message || 'Backend API is offline');
+        }
+
+        if (!response.ok) {
+          throw new Error(`API returned ${response.status}`);
+        }
+
         if (data.success && data.data) {
           setStats(data.data);
         }
         setError(null);
+        setBackendUrl(null);
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : 'Failed to connect to backend API';
         console.error('Error fetching stats:', err);
@@ -111,16 +124,30 @@ export default function Home() {
   if (error) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <div className="text-center max-w-md">
+        <div className="text-center max-w-lg">
           <div className="mb-4 text-6xl">⚠️</div>
-          <h2 className="mb-2 text-xl font-semibold text-red-400">Connection Error</h2>
+          <h2 className="mb-2 text-xl font-semibold text-red-400">Backend Offline</h2>
           <p className="text-zinc-400 mb-4">{error}</p>
           <div className="bg-zinc-800/50 rounded-lg p-4 text-left">
+            <p className="text-sm text-zinc-500 mb-2">Connection Details:</p>
+            <ul className="text-sm text-zinc-400 space-y-2">
+              <li className="flex justify-between">
+                <span>Dashboard API:</span>
+                <code className="text-xs bg-zinc-700 px-1 rounded">{API_URL}</code>
+              </li>
+              {backendUrl && (
+                <li className="flex justify-between">
+                  <span>Backend URL:</span>
+                  <code className="text-xs bg-zinc-700 px-1 rounded">{backendUrl}</code>
+                </li>
+              )}
+            </ul>
+            <hr className="my-3 border-zinc-700" />
             <p className="text-sm text-zinc-500 mb-2">Troubleshooting:</p>
             <ul className="text-sm text-zinc-400 list-disc list-inside space-y-1">
-              <li>Verify backend is running</li>
-              <li>Check API URL: <code className="text-xs bg-zinc-700 px-1 rounded">{API_URL}</code></li>
-              <li>Ensure CORS is configured</li>
+              <li>Check if backend service is running on Render</li>
+              <li>Verify <code className="text-xs bg-zinc-700 px-1 rounded">BOT_API_URL</code> is set in Render env vars</li>
+              <li>Test backend health: <code className="text-xs bg-zinc-700 px-1 rounded">{backendUrl}/health</code></li>
             </ul>
           </div>
         </div>
