@@ -2,16 +2,20 @@
 node_modules/
 yarn.lock
 pnpm-lock.yaml
+interface/memecoin-dashboard/node_modules/
 
 # Build outputs
 dist/
 build/
 *.tsbuildinfo
+interface/memecoin-dashboard/.next/
+interface/memecoin-dashboard/out/
 
 # Environment variables
 .env
 .env.local
 .env.production
+interface/memecoin-dashboard/.env.local
 
 # Logs
 logs/

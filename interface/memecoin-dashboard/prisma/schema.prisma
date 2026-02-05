@@ -1,0 +1,123 @@
+// Prisma schema for dashboard (shared with bot database)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Core trading tables
+model Trade {
+  id                   String   @id @default(uuid())
+  tokenAddress         String   @map("token_address")
+  entryPrice           Decimal  @map("entry_price") @db.Decimal(18, 9)
+  entryAmount          Decimal  @map("entry_amount") @db.Decimal(18, 6)
+  entryTime            DateTime @map("entry_time")
+  exitPrice            Decimal? @map("exit_price") @db.Decimal(18, 9)
+  exitAmount           Decimal? @map("exit_amount") @db.Decimal(18, 6)
+  exitTime             DateTime? @map("exit_time")
+  exitReason           String?  @map("exit_reason")
+  profitLoss           Decimal? @map("profit_loss") @db.Decimal(18, 6)
+  profitLossPercent    Decimal? @map("profit_loss_percent") @db.Decimal(10, 2)
+  convictionScore      Decimal  @map("conviction_score") @db.Decimal(5, 2)
+  fingerprint          Json?
+  outcome              String?
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("trades")
+  @@index([tokenAddress])
+  @@index([entryTime(sort: Desc)])
+  @@index([outcome])
+}
+
+model Position {
+  id                    String    @id @default(uuid())
+  tokenAddress          String    @unique @map("token_address")
+  tokenName             String?   @map("token_name")
+  tokenSymbol           String?   @map("token_symbol")
+  entryPrice            Decimal   @map("entry_price") @db.Decimal(18, 9)
+  entryAmount           Decimal   @map("entry_amount") @db.Decimal(18, 6)
+  entryTime             DateTime  @map("entry_time")
+  entryConviction       Int       @map("entry_conviction")
+  currentPrice          Decimal?  @map("current_price") @db.Decimal(18, 9)
+  highestPrice          Decimal?  @map("highest_price") @db.Decimal(18, 9)
+  stopLossPrice         Decimal?  @map("stop_loss_price") @db.Decimal(18, 9)
+  trailingStopActive    Boolean   @default(false) @map("trailing_stop_active")
+  takeProfitreach30Hit     Boolean   @default(false) @map("take_profit_30_hit")
+  takeProfit60Hit       Boolean   @default(false) @map("take_profit_60_hit")
+  takeProfit100Hit      Boolean   @default(false) @map("take_profit_100_hit")
+  takeProfit200Hit      Boolean   @default(false) @map("take_profit_200_hit")
+  remainingAmount       Decimal   @map("remaining_amount") @db.Decimal(18, 6)
+  pnlPercent            Decimal?  @map("pnl_percent") @db.Decimal(10, 4)
+  pnlUsd                Decimal?  @map("pnl_usd") @db.Decimal(20, 10)
+  status                String    @default("OPEN")
+  exitReason            String?   @map("exit_reason")
+  exitTime              DateTime? @map("exit_time")
+  smartWalletsInPosition String[]  @map("smart_wallets_in_position")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@map("positions")
+  @@index([status])
+  @@index([entryTime(sort: Desc)])
+}
+
+model Alert {
+  id            String   @id @default(uuid())
+  level         String
+  type          String
+  message       String
+  data          Json?
+  acknowledged  Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("alerts")
+  @@index([level])
+  @@index([acknowledged])
+  @@index([createdAt(sort: Desc)])
+}
+
+model SmartWallet {
+  id              String   @id @default(uuid())
+  address         String   @unique
+  tier            Int
+  score           Decimal  @db.Decimal(10, 2)
+  winRate         Decimal  @map("win_rate") @db.Decimal(5, 2)
+  averageReturn   Decimal  @map("average_return") @db.Decimal(10, 2)
+  tokensEntered   Int      @map("tokens_entered")
+  lastActive      DateTime @map("last_active")
+  isActive        Boolean  @default(true) @map("is_active")
+  totalTrades     Int      @map("total_trades")
+  successfulTrades Int     @map("successful_trades")
+  averageHoldTime Int      @map("average_hold_time")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("smart_wallets")
+  @@index([tier])
+  @@index([score(sort: Desc)])
+  @@index([lastActive(sort: Desc)])
+}
+
+model BotParameter {
+  id                   String   @id @default(uuid())
+  version              Int      @unique
+  dipEntryRange        Json     @map("dip_entry_range")
+  stopLossPercent      Decimal  @map("stop_loss_percent") @db.Decimal(5, 2)
+  positionSizes        Json     @map("position_sizes")
+  maxOpenPositions     Int      @map("max_open_positions")
+  maxDailyLoss         Decimal  @map("max_daily_loss") @db.Decimal(5, 2)
+  maxDailyProfit       Decimal  @map("max_daily_profit") @db.Decimal(5, 2)
+  isActive             Boolean  @default(false) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  @@map("bot_parameters")
+  @@index([version(sort: Desc)])
+  @@index([isActive])
+}
+
+// Will add more models as needed for each phase
