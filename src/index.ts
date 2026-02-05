@@ -29,11 +29,28 @@ async function main() {
   logger.info('🧠 WITH ADAPTIVE LEARNING ENGINE');
   logger.info('================================================');
 
-  // Validate environment
-  if (!process.env.SOLANA_RPC_PRIMARY) {
-    logger.error('Missing required environment variable: SOLANA_RPC_PRIMARY');
+  // Validate required environment variables
+  const requiredEnvVars = [
+    'SOLANA_RPC_PRIMARY',
+    'DATABASE_URL',
+  ];
+
+  const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+  if (missingEnvVars.length > 0) {
+    logger.error('❌ Missing required environment variables:', {
+      missing: missingEnvVars,
+      hint: 'Please check your .env file or Render environment variables'
+    });
+    console.error('\n❌ STARTUP FAILED: Missing required environment variables:');
+    missingEnvVars.forEach(varName => {
+      console.error(`   - ${varName}`);
+    });
+    console.error('\nPlease set these in your Render dashboard or .env file\n');
     process.exit(1);
   }
+
+  logger.info('✅ Environment variables validated');
 
   // Declare variables at function scope for shutdown access
   let walletScanner: WalletScanner | undefined;
@@ -100,12 +117,26 @@ async function main() {
 
     // Initialize PostgreSQL
     logger.info('🗄️  Initializing PostgreSQL...');
-    initializePostgres();
-    const dbHealthy = await dbHealthCheck();
-    if (!dbHealthy) {
-      throw new Error('PostgreSQL health check failed');
+    try {
+      initializePostgres();
+      const dbHealthy = await dbHealthCheck();
+      if (!dbHealthy) {
+        console.error('\n❌ DATABASE CONNECTION FAILED');
+        console.error('Please verify:');
+        console.error('  1. DATABASE_URL is correctly set');
+        console.error('  2. PostgreSQL instance is running and accessible');
+        console.error('  3. Database credentials are correct');
+        console.error('  4. Firewall/network allows connection\n');
+        throw new Error('PostgreSQL health check failed');
+      }
+      logger.info('✅ PostgreSQL connected');
+    } catch (error: any) {
+      console.error('\n❌ POSTGRESQL INITIALIZATION ERROR:', error.message);
+      console.error('\nDATABASE_URL format should be:');
+      console.error('  postgresql://user:password@host:port/database');
+      console.error('\nCurrent DATABASE_URL:', process.env.DATABASE_URL ? '(set but connection failed)' : '(not set)');
+      throw error;
     }
-    logger.info('✅ PostgreSQL connected');
 
     // Initialize database schema
     logger.info('📋 Initializing database schema...');
@@ -114,12 +145,18 @@ async function main() {
 
     // Initialize Cache (PostgreSQL-based)
     logger.info('💾 Initializing Cache...');
-    await initializeCache();
-    const cacheHealthy = await cacheHealthCheck();
-    if (!cacheHealthy) {
-      throw new Error('Cache health check failed');
+    try {
+      await initializeCache();
+      const cacheHealthy = await cacheHealthCheck();
+      if (!cacheHealthy) {
+        console.error('\n❌ CACHE INITIALIZATION FAILED');
+        throw new Error('Cache health check failed');
+      }
+      logger.info('✅ Cache initialized (PostgreSQL)');
+    } catch (error: any) {
+      console.error('\n❌ CACHE ERROR:', error.message);
+      throw error;
     }
-    logger.info('✅ Cache initialized (PostgreSQL)');
 
     // Start periodic cache cleanup (every 5 minutes)
     setInterval(() => {

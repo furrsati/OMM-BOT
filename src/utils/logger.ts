@@ -57,14 +57,13 @@ export const logger = winston.createLogger({
   ],
 });
 
-// Add console transport for non-production
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(
-    new winston.transports.Console({
-      format: consoleFormat,
-    })
-  );
-}
+// Always add console transport (critical for cloud deployments like Render)
+// In production, logs need to go to stdout/stderr for the platform to capture them
+logger.add(
+  new winston.transports.Console({
+    format: consoleFormat,
+  })
+);
 
 // Specialized logging functions
 export const logTrade = (action: string, data: any) => {
