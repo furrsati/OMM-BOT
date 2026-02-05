@@ -1,0 +1,38 @@
+    // STUB: Return mock fingerprint structure
+    const fingerprint: TradeFingerprint = {
+      smartWallets: {
+        count: 0,
+        tiers: [],
+        addresses: []
+      },
+      tokenSafety: {
+        overallScore: 0,
+        liquidityLocked: false,
+        liquidityDepth: 0,
+        honeypotRisk: false,
+        mintAuthority: false,
+        freezeAuthority: false
+      },
+      marketConditions: {
+        solPrice: 0,
+        solTrend: 'stable',
+        btcTrend: 'stable',
+        regime: 'FULL',
+        timeOfDay: new Date().getHours(),
+        dayOfWeek: new Date().getDay()
+      },
+      hypePhase: 'DISCOVERY',
+      socialSignals: {
+        twitterFollowers: 0,
+        telegramMembers: 0,
+        mentionVelocity: 0
+      },
+      entryConditions: {
+        dipDepth: 0,
+        tokenAge: 0,
+        liquidityDepth: 0,
+        holderCount: 0,
+        buySelRatio: 0
+      },
+      timestamp: Date.now()
+    };

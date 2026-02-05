@@ -1,0 +1,401 @@
+/**
+ * Wallet Manager
+ *
+ * Maintains the live smart wallet watchlist:
+ * - Keeps 20-100 top-scored wallets active
+ * - Re-scores all wallets weekly
+ * - Demotes declining wallets
+ * - Promotes new qualifying wallets
+ * - Detects crowding and rotates burned wallets
+ * - Tracks wallet effectiveness
+ */
+
+import { Connection } from '@solana/web3.js';
+import { logger } from '../utils/logger';
+import { SmartWallet } from '../types';
+import { query } from '../db/postgres';
+import { WalletScorer } from './wallet-scorer';
+
+interface WalletStats {
+  address: string;
+  signalsGenerated: number;
+  tradesEntered: number;
+  tradesWon: number;
+  avgTimeToMove: number; // Average time from signal to price movement
+  isCrowded: boolean;
+  isBurned: boolean;
+}
+
+export class WalletManager {
+  private connection: Connection;
+  private scorer: WalletScorer;
+  private watchlist: Map<string, SmartWallet> = new Map();
+  private walletStats: Map<string, WalletStats> = new Map();
+
+  constructor(connection: Connection) {
+    this.connection = connection;
+    this.scorer = new WalletScorer(connection);
+  }
+
+  /**
+   * Initialize wallet manager and load watchlist
+   */
+  async initialize(): Promise<void> {
+    logger.info('📋 Initializing Wallet Manager...');
+
+    try {
+      // Load existing watchlist from database
+      await this.loadWatchlist();
+
+      // Load wallet stats
+      await this.loadWalletStats();
+
+      logger.info(`✅ Wallet Manager initialized`, {
+        watchlistSize: this.watchlist.size,
+        tier1: this.getTierCount(1),
+        tier2: this.getTierCount(2),
+        tier3: this.getTierCount(3)
+      });
+
+    } catch (error: any) {
+      logger.error('Error initializing wallet manager', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Start weekly re-scoring routine
+   */
+  async startWeeklyMaintenance(): Promise<void> {
+    logger.info('Starting weekly wallet maintenance routine...');
+
+    // Run immediately on start
+    await this.performWeeklyMaintenance();
+
+    // Then run every 7 days
+    setInterval(async () => {
+      await this.performWeeklyMaintenance();
+    }, 7 * 24 * 60 * 60 * 1000);
+  }
+
+  /**
+   * Perform weekly maintenance
+   */
+  private async performWeeklyMaintenance(): Promise<void> {
+    logger.info('🔧 Performing weekly wallet maintenance...');
+
+    try {
+      // Step 1: Re-score ALL wallets
+      logger.info('Re-scoring all wallets...');
+      const rescored = await this.scorer.scoreAllWallets();
+
+      // Step 2: Detect and remove burned wallets
+      logger.info('Detecting crowded/burned wallets...');
+      await this.detectBurnedWallets();
+
+      // Step 3: Update watchlist based on new scores
+      logger.info('Updating watchlist...');
+      await this.updateWatchlist(rescored);
+
+      // Step 4: Clean up inactive wallets
+      logger.info('Removing inactive wallets...');
+      await this.removeInactiveWallets();
+
+      logger.info('✅ Weekly maintenance complete', {
+        watchlistSize: this.watchlist.size,
+        tier1: this.getTierCount(1),
+        tier2: this.getTierCount(2),
+        tier3: this.getTierCount(3)
+      });
+
+    } catch (error: any) {
+      logger.error('Error in weekly maintenance', { error: error.message });
+    }
+  }
+
+  /**
+   * Get current watchlist
+   */
+  getWatchlist(): SmartWallet[] {
+    return Array.from(this.watchlist.values());
+  }
+
+  /**
+   * Get wallets by tier
+   */
+  getWalletsByTier(tier: 1 | 2 | 3): SmartWallet[] {
+    return this.getWatchlist().filter(w => w.tier === tier);
+  }
+
+  /**
+   * Check if a wallet is on the watchlist
+   */
+  isWatching(address: string): boolean {
+    return this.watchlist.has(address);
+  }
+
+  /**
+   * Record a wallet signal (wallet entered a token)
+   */
+  async recordWalletSignal(walletAddress: string, tokenAddress: string): Promise<void> {
+    if (!this.walletStats.has(walletAddress)) {
+      this.walletStats.set(walletAddress, {
+        address: walletAddress,
+        signalsGenerated: 0,
+        tradesEntered: 0,
+        tradesWon: 0,
+        avgTimeToMove: 0,
+        isCrowded: false,
+        isBurned: false
+      });
+    }
+
+    const stats = this.walletStats.get(walletAddress)!;
+    stats.signalsGenerated++;
+
+    this.walletStats.set(walletAddress, stats);
+
+    // Save to database
+    await this.saveWalletStats(walletAddress);
+  }
+
+  /**
+   * Record trade outcome for wallet signal
+   */
+  async recordTradeOutcome(
+    walletAddress: string,
+    entered: boolean,
+    won: boolean
+  ): Promise<void> {
+    const stats = this.walletStats.get(walletAddress);
+    if (!stats) return;
+
+    if (entered) {
+      stats.tradesEntered++;
+      if (won) {
+        stats.tradesWon++;
+      }
+    }
+
+    this.walletStats.set(walletAddress, stats);
+    await this.saveWalletStats(walletAddress);
+  }
+
+  /**
+   * Get wallet effectiveness metrics
+   */
+  getWalletEffectiveness(address: string): WalletStats | null {
+    return this.walletStats.get(address) || null;
+  }
+
+  /**
+   * Load watchlist from database
+   */
+  private async loadWatchlist(): Promise<void> {
+    try {
+      const result = await query(`
+        SELECT address, tier, score, win_rate, average_return,
+               tokens_entered, last_active, total_trades,
+               successful_trades, average_hold_time
+        FROM smart_wallets
+        WHERE last_active > NOW() - INTERVAL '7 days'
+        ORDER BY score DESC
+        LIMIT 100
+      `);
+
+      for (const row of result.rows) {
+        const wallet: SmartWallet = {
+          address: row.address,
+          tier: row.tier,
+          score: row.score,
+          winRate: row.win_rate,
+          averageReturn: row.average_return,
+          tokensEntered: row.tokens_entered,
+          lastActive: new Date(row.last_active),
+          metrics: {
+            totalTrades: row.total_trades,
+            successfulTrades: row.successful_trades,
+            averageHoldTime: row.average_hold_time
+          }
+        };
+
+        this.watchlist.set(wallet.address, wallet);
+      }
+
+      logger.info(`Loaded ${this.watchlist.size} wallets from database`);
+
+    } catch (error: any) {
+      logger.error('Error loading watchlist', { error: error.message });
+    }
+  }
+
+  /**
+   * Load wallet stats from database
+   */
+  private async loadWalletStats(): Promise<void> {
+    try {
+      const result = await query(`
+        SELECT wallet_address, signals_generated, trades_entered,
+               trades_won, avg_time_to_move, is_crowded, is_burned
+        FROM wallet_stats
+      `);
+
+      for (const row of result.rows) {
+        this.walletStats.set(row.wallet_address, {
+          address: row.wallet_address,
+          signalsGenerated: row.signals_generated,
+          tradesEntered: row.trades_entered,
+          tradesWon: row.trades_won,
+          avgTimeToMove: row.avg_time_to_move,
+          isCrowded: row.is_crowded,
+          isBurned: row.is_burned
+        });
+      }
+
+      logger.debug(`Loaded stats for ${this.walletStats.size} wallets`);
+
+    } catch (error: any) {
+      logger.error('Error loading wallet stats', { error: error.message });
+    }
+  }
+
+  /**
+   * Detect burned wallets (being front-run)
+   */
+  private async detectBurnedWallets(): Promise<void> {
+    for (const [address, stats] of this.walletStats.entries()) {
+      // Check if wallet is being front-run
+      // If avg time-to-move is shrinking, others are copying this wallet
+      // If trade entry rate is declining, wallet is crowded
+
+      if (stats.signalsGenerated > 5) {
+        const entryRate = stats.tradesEntered / stats.signalsGenerated;
+
+        // If entry rate < 50%, wallet might be crowded (we're getting beaten)
+        if (entryRate < 0.5) {
+          stats.isCrowded = true;
+          logger.warn(`Wallet ${address.slice(0, 8)}... marked as CROWDED (entry rate: ${(entryRate * 100).toFixed(1)}%)`);
+        }
+
+        // If entry rate < 20%, wallet is burned
+        if (entryRate < 0.2) {
+          stats.isBurned = true;
+          logger.warn(`Wallet ${address.slice(0, 8)}... marked as BURNED (entry rate: ${(entryRate * 100).toFixed(1)}%)`);
+        }
+      }
+
+      this.walletStats.set(address, stats);
+    }
+
+    // Remove burned wallets from watchlist
+    for (const [address, stats] of this.walletStats.entries()) {
+      if (stats.isBurned && this.watchlist.has(address)) {
+        logger.info(`Removing burned wallet ${address.slice(0, 8)}... from watchlist`);
+        this.watchlist.delete(address);
+
+        // Mark as inactive in database
+        await query(`
+          UPDATE smart_wallets
+          SET is_active = false, updated_at = NOW()
+          WHERE address = $1
+        `, [address]);
+      }
+    }
+  }
+
+  /**
+   * Update watchlist with newly scored wallets
+   */
+  private async updateWatchlist(scoredWallets: SmartWallet[]): Promise<void> {
+    // Filter out burned wallets
+    const cleanWallets = scoredWallets.filter(w => {
+      const stats = this.walletStats.get(w.address);
+      return !stats || !stats.isBurned;
+    });
+
+    // Keep top 100 wallets
+    const topWallets = cleanWallets.slice(0, 100);
+
+    // Clear and rebuild watchlist
+    this.watchlist.clear();
+    for (const wallet of topWallets) {
+      this.watchlist.set(wallet.address, wallet);
+    }
+
+    logger.info(`Watchlist updated with ${this.watchlist.size} wallets`);
+  }
+
+  /**
+   * Remove inactive wallets (> 7 days)
+   */
+  private async removeInactiveWallets(): Promise<void> {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const toRemove: string[] = [];
+
+    for (const [address, wallet] of this.watchlist.entries()) {
+      if (wallet.lastActive < sevenDaysAgo) {
+        toRemove.push(address);
+      }
+    }
+
+    for (const address of toRemove) {
+      this.watchlist.delete(address);
+      logger.info(`Removed inactive wallet ${address.slice(0, 8)}...`);
+    }
+
+    if (toRemove.length > 0) {
+      logger.info(`Removed ${toRemove.length} inactive wallets`);
+    }
+  }
+
+  /**
+   * Save wallet stats to database
+   */
+  private async saveWalletStats(address: string): Promise<void> {
+    try {
+      const stats = this.walletStats.get(address);
+      if (!stats) return;
+
+      await query(`
+        INSERT INTO wallet_stats (
+          wallet_address, signals_generated, trades_entered,
+          trades_won, avg_time_to_move, is_crowded, is_burned, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        ON CONFLICT (wallet_address)
+        DO UPDATE SET
+          signals_generated = $2,
+          trades_entered = $3,
+          trades_won = $4,
+          avg_time_to_move = $5,
+          is_crowded = $6,
+          is_burned = $7,
+          updated_at = NOW()
+      `, [
+        stats.address,
+        stats.signalsGenerated,
+        stats.tradesEntered,
+        stats.tradesWon,
+        stats.avgTimeToMove,
+        stats.isCrowded,
+        stats.isBurned
+      ]);
+
+    } catch (error: any) {
+      logger.debug('Error saving wallet stats', { error: error.message });
+    }
+  }
+
+  /**
+   * Get count of wallets in a tier
+   */
+  private getTierCount(tier: 1 | 2 | 3): number {
+    return Array.from(this.watchlist.values()).filter(w => w.tier === tier).length;
+  }
+
+  /**
+   * Get wallet info
+   */
+  getWallet(address: string): SmartWallet | null {
+    return this.watchlist.get(address) || null;
+  }
+}
