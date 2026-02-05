@@ -463,10 +463,18 @@ async function main() {
     logger.info('✅ PHASE 1 COMPLETE');
     logger.info('');
     logger.info('🧠 Learning Engine Status:');
-    logger.info('  • Pattern Memory (Level 1): READY (skeleton)');
-    logger.info('  • Weight Optimizer (Level 2): READY (skeleton)');
-    logger.info('  • Parameter Tuner (Level 3): READY (skeleton)');
-    logger.info('  • Meta-Learner (Level 4): READY (skeleton)');
+    const finalSchedulerStatus = learningScheduler?.getStatus();
+    logger.info(`  • Pattern Memory (Level 1): ACTIVE`);
+    logger.info(`  • Weight Optimizer (Level 2): ACTIVE`);
+    logger.info(`  • Parameter Tuner (Level 3): ACTIVE`);
+    logger.info(`  • Meta-Learner (Level 4): ACTIVE`);
+    logger.info(`  • Learning Scheduler: ${finalSchedulerStatus?.isActive ? "ACTIVE" : "INACTIVE"} (${finalSchedulerStatus?.totalTrades || 0} trades)`);
+    if (finalSchedulerStatus?.lastWeightOptimization) {
+      logger.info(`  • Last Weight Optimization: ${finalSchedulerStatus.lastWeightOptimization.toISOString()}`);
+    }
+    if (finalSchedulerStatus?.lastParameterTuning) {
+      logger.info(`  • Last Parameter Tuning: ${finalSchedulerStatus.lastParameterTuning.toISOString()}`);
+    }
     logger.info('');
     logger.info('📊 Infrastructure Status:');
     logger.info('  • RPC Connection: HEALTHY');
@@ -562,6 +570,11 @@ async function main() {
         }
         if (regimeDetector) {
           regimeDetector.stop();
+        }
+
+        // Stop learning scheduler
+        if (learningScheduler) {
+          learningScheduler.stop();
         }
 
         // Stop conviction engine
