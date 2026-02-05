@@ -457,4 +457,11 @@ export class LearningScheduler {
     const tradeCount = await this.getTotalCompletedTrades();
     await this.generateFullReport(tradeCount);
   }
+
+  /**
+   * Get current category weights (for API access)
+   */
+  async getCurrentWeights(): Promise<any> {
+    return await this.weightOptimizer.getCurrentWeights();
+  }
 }
