@@ -139,3 +139,122 @@ END $$;
 ALTER TABLE alerts DROP CONSTRAINT IF EXISTS alerts_level_check;
 ALTER TABLE alerts ADD CONSTRAINT alerts_level_check
   CHECK (level IN ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'critical', 'error', 'warning', 'info'));
+
+-- =====================================================
+-- BLACKLIST TABLE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS blacklist (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  address VARCHAR(44) NOT NULL UNIQUE,
+  type VARCHAR(20) NOT NULL CHECK (type IN ('wallet', 'contract')),
+  reason TEXT NOT NULL,
+  depth INT NOT NULL DEFAULT 0,
+  evidence JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_blacklist_address ON blacklist(address);
+CREATE INDEX IF NOT EXISTS idx_blacklist_type ON blacklist(type);
+
+-- =====================================================
+-- TOKENS TABLE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  contract_address VARCHAR(44) NOT NULL UNIQUE,
+  deployer VARCHAR(44) NOT NULL,
+  name VARCHAR(255),
+  symbol VARCHAR(50),
+  decimals INT NOT NULL,
+  total_supply BIGINT,
+  metadata JSONB DEFAULT '{}',
+  safety_score DECIMAL(5, 2) DEFAULT 0,
+  liquidity_depth DECIMAL(18, 6) DEFAULT 0,
+  holder_count INT DEFAULT 0,
+  is_honeypot BOOLEAN DEFAULT FALSE,
+  has_mint_authority BOOLEAN DEFAULT FALSE,
+  has_freeze_authority BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tokens_contract_address ON tokens(contract_address);
+CREATE INDEX IF NOT EXISTS idx_tokens_deployer ON tokens(deployer);
+CREATE INDEX IF NOT EXISTS idx_tokens_safety_score ON tokens(safety_score DESC);
+CREATE INDEX IF NOT EXISTS idx_tokens_created_at ON tokens(created_at DESC);
+
+-- =====================================================
+-- DANGER PATTERNS TABLE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS danger_patterns (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pattern_data JSONB NOT NULL,
+  confidence_score DECIMAL(5, 2) NOT NULL,
+  occurrences INT DEFAULT 1,
+  last_seen TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_danger_patterns_confidence ON danger_patterns(confidence_score DESC);
+
+-- =====================================================
+-- WIN PATTERNS TABLE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS win_patterns (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pattern_data JSONB NOT NULL,
+  avg_return DECIMAL(10, 2) NOT NULL,
+  occurrences INT DEFAULT 1,
+  last_seen TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_win_patterns_avg_return ON win_patterns(avg_return DESC);
+
+-- =====================================================
+-- LEARNING SNAPSHOTS TABLE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS learning_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  version INT NOT NULL,
+  weights JSONB NOT NULL,
+  parameters JSONB NOT NULL,
+  trade_count INT NOT NULL,
+  win_rate DECIMAL(5, 2) NOT NULL,
+  profit_factor DECIMAL(10, 2) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_snapshots_version ON learning_snapshots(version DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_snapshots_created_at ON learning_snapshots(created_at DESC);
+
+-- =====================================================
+-- AUDIT LOG TABLE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS audit_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  action VARCHAR(100) NOT NULL,
+  actor VARCHAR(100) NOT NULL,
+  details JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);
+
+-- =====================================================
+-- PRICE HISTORY TABLE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS price_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_address VARCHAR(44) NOT NULL,
+  price DECIMAL(18, 9) NOT NULL,
+  volume_24h DECIMAL(18, 2),
+  market_cap DECIMAL(18, 2),
+  liquidity DECIMAL(18, 2),
+  holder_count INT,
+  recorded_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_history_token ON price_history(token_address);
+CREATE INDEX IF NOT EXISTS idx_price_history_recorded ON price_history(recorded_at DESC);
