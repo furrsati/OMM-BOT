@@ -27,6 +27,9 @@ export class APIServer {
    * Setup Express middleware
    */
   private setupMiddleware(): void {
+    // Trust proxy (required for rate limiting behind Render/reverse proxy)
+    this.app.set('trust proxy', 1);
+
     // Body parsing
     this.app.use(express.json());
     this.app.use(express.urlencoded({ extended: true }));
