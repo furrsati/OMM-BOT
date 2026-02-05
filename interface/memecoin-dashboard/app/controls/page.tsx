@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Power, Pause, Play, AlertTriangle, RefreshCw, Zap } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 interface BotStatus {
   isRunning: boolean;
