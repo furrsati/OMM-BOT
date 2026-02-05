@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Users, Plus, Trash2, RefreshCw, Star, TrendingUp, TrendingDown, Eye, EyeOff, Copy, Check } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 interface SmartWallet {
   id: string;

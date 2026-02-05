@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
+const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     const response = await fetch(`${BOT_API_URL}/api/execution`, {
-      next: { revalidate: 0 },
+      cache: 'no-store',
       signal: AbortSignal.timeout(10000),
     });
 

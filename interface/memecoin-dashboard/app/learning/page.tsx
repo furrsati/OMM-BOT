@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Brain, RefreshCw, TrendingUp, TrendingDown, RotateCcw, Lock, Unlock, Info } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 interface CategoryWeight {
   name: string;

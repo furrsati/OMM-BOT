@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
+const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(_request: NextRequest) {
   try {
     // Fetch both trades and stats from backend
     const [tradesRes, statsRes] = await Promise.all([
       fetch(`${BOT_API_URL}/api/trades/recent?limit=50`, {
-        next: { revalidate: 0 },
+        cache: 'no-store',
         signal: AbortSignal.timeout(10000),
       }),
       fetch(`${BOT_API_URL}/api/trades/stats`, {
-        next: { revalidate: 0 },
+        cache: 'no-store',
         signal: AbortSignal.timeout(10000),
       }),
     ]);

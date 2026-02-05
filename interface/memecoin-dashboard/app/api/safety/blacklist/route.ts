@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
+const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
 
 export async function POST(request: NextRequest) {
   try {

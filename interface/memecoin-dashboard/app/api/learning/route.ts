@@ -1,21 +1,23 @@
 import { NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
+const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     // Fetch all learning data from multiple endpoints
     const [weightsRes, parametersRes, patternsRes] = await Promise.all([
       fetch(`${BOT_API_URL}/api/learning/weights`, {
-        next: { revalidate: 0 },
+        cache: 'no-store',
         signal: AbortSignal.timeout(10000),
       }),
       fetch(`${BOT_API_URL}/api/learning/parameters`, {
-        next: { revalidate: 0 },
+        cache: 'no-store',
         signal: AbortSignal.timeout(10000),
       }),
       fetch(`${BOT_API_URL}/api/learning/patterns`, {
-        next: { revalidate: 0 },
+        cache: 'no-store',
         signal: AbortSignal.timeout(10000),
       }),
     ]);
