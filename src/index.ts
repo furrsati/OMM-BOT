@@ -10,6 +10,7 @@ import { HypeDetector } from './social/hype-detector';
 import { WalletScanner, WalletManager } from './discovery';
 import { PriceFeed, RegimeDetector } from './market';
 import { SafetyScorer } from './safety';
+import { SignalAggregator, ConvictionScorer, EntryDecisionEngine, SignalTracker } from './conviction';
 
 // Load environment variables
 dotenv.config();
@@ -35,6 +36,7 @@ async function main() {
   let priceFeed: PriceFeed | undefined;
   let regimeDetector: RegimeDetector | undefined;
   let safetyScorer: SafetyScorer | undefined;
+  let signalTracker: SignalTracker | undefined;
   let rpcManager: any;
 
   try {
@@ -234,6 +236,65 @@ async function main() {
     logger.info('✅ PHASE 3 COMPLETE');
 
     // ============================================================
+    // PHASE 4: CONVICTION ENGINE
+    // ============================================================
+
+    logger.info('================================================');
+    logger.info('🎯 PHASE 4: CONVICTION ENGINE');
+    logger.info('================================================');
+
+    // Initialize Signal Aggregator
+    logger.info('📡 Initializing Signal Aggregator...');
+    const signalAggregator = new SignalAggregator(
+      connection,
+      walletManager,
+      safetyScorer,
+      priceFeed,
+      regimeDetector
+    );
+    logger.info('✅ Signal Aggregator initialized');
+
+    // Initialize Conviction Scorer
+    logger.info('📊 Initializing Conviction Scorer...');
+    const convictionScorer = new ConvictionScorer();
+    logger.info('✅ Conviction Scorer initialized');
+
+    // Initialize Entry Decision Engine
+    logger.info('🚦 Initializing Entry Decision Engine...');
+    const entryDecision = new EntryDecisionEngine();
+    logger.info('✅ Entry Decision Engine initialized');
+
+    // Get decision engine state
+    const decisionState = entryDecision.getState();
+    logger.info('📊 Decision Engine State:', {
+      dailyPnL: decisionState.dailyPnL.toFixed(2) + '%',
+      openPositions: decisionState.openPositions,
+      losingStreak: decisionState.losingStreak,
+      cooldownActive: decisionState.cooldownActive
+    });
+
+    // Initialize Signal Tracker
+    logger.info('👀 Initializing Signal Tracker...');
+    signalTracker = new SignalTracker(
+      connection,
+      walletManager,
+      priceFeed,
+      signalAggregator,
+      convictionScorer,
+      entryDecision
+    );
+
+    // Start signal tracking if trading is enabled
+    if (process.env.ENABLE_SIGNAL_TRACKING !== 'false') {
+      signalTracker.start();
+      logger.info('✅ Signal Tracker started (monitoring opportunities)');
+    } else {
+      logger.info('⏸️  Signal tracking disabled (ENABLE_SIGNAL_TRACKING=false)');
+    }
+
+    logger.info('✅ PHASE 4 COMPLETE');
+
+    // ============================================================
     // BOT STATUS DISPLAY
     // ============================================================
 
@@ -282,14 +343,22 @@ async function main() {
     logger.info(`  • Honeypot Detector: READY`);
     logger.info(`  • Blacklist Manager: READY (${blacklistStats.totalEntries} entries)`);
     logger.info('');
+    logger.info('🎯 Conviction Engine Status:');
+    logger.info(`  • Signal Aggregator: READY`);
+    logger.info(`  • Conviction Scorer: READY`);
+    logger.info(`  • Entry Decision Engine: READY (Daily P&L: ${decisionState.dailyPnL.toFixed(2)}%)`);
+    logger.info(`  • Signal Tracker: ${process.env.ENABLE_SIGNAL_TRACKING !== 'false' ? 'ACTIVE' : 'DISABLED'}`);
+    const trackerStats = signalTracker?.getStats();
+    if (trackerStats) {
+      logger.info(`  • Tracked Opportunities: ${trackerStats.watching} watching, ${trackerStats.ready} ready`);
+    }
+    logger.info('');
     logger.info('🎯 Next Steps:');
-    logger.info('  → Phase 4: Conviction Engine (Scoring system)');
     logger.info('  → Phase 5: Execution Engine (Trade execution)');
     logger.info('  → Phase 6: Position Management (Monitoring, stops)');
     logger.info('  → Phase 7: Learning Engine (Full implementation)');
     logger.info('================================================');
 
-    // TODO: Phase 4 - Initialize conviction engine
     // TODO: Phase 5 - Initialize execution engine
     // TODO: Phase 6 - Initialize position manager
     // TODO: Phase 7 - Complete learning engine implementation
@@ -312,6 +381,11 @@ async function main() {
         }
         if (regimeDetector) {
           regimeDetector.stop();
+        }
+
+        // Stop conviction engine
+        if (signalTracker) {
+          signalTracker.stop();
         }
 
         // Stop RPC manager
