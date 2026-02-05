@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3002';
+const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
 
 const getMockLearningData = () => ({
   stats: {
@@ -41,14 +41,45 @@ const getMockLearningData = () => ({
 
 export async function GET() {
   try {
-    const response = await fetch(`${BOT_API_URL}/api/learning`, {
-      next: { revalidate: 0 },
-      signal: AbortSignal.timeout(5000),
-    });
+    // Fetch all learning data from multiple endpoints
+    const [weightsRes, parametersRes, patternsRes] = await Promise.all([
+      fetch(`${BOT_API_URL}/api/learning/weights`, {
+        next: { revalidate: 0 },
+        signal: AbortSignal.timeout(5000),
+      }),
+      fetch(`${BOT_API_URL}/api/learning/parameters`, {
+        next: { revalidate: 0 },
+        signal: AbortSignal.timeout(5000),
+      }),
+      fetch(`${BOT_API_URL}/api/learning/patterns`, {
+        next: { revalidate: 0 },
+        signal: AbortSignal.timeout(5000),
+      }),
+    ]);
 
-    if (response.ok) {
-      const data = await response.json();
-      return NextResponse.json({ success: true, data });
+    if (weightsRes.ok && parametersRes.ok && patternsRes.ok) {
+      const weightsData = await weightsRes.json();
+      const parametersData = await parametersRes.json();
+      const patternsData = await patternsRes.json();
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          stats: {
+            totalTrades: 0,
+            tradesAnalyzed: 0,
+            lastOptimization: null,
+            nextOptimization: 0,
+            totalAdjustments: 0,
+            driftFromBaseline: 0,
+            learningMode: 'active' as const,
+          },
+          weights: weightsData.data || [],
+          parameters: parametersData.data || [],
+          winPatterns: patternsData.data?.winPatterns || [],
+          dangerPatterns: patternsData.data?.dangerPatterns || [],
+        },
+      });
     }
   } catch {
     // Backend not available

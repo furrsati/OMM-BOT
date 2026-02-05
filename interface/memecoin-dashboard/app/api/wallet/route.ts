@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3002';
+const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
 
 const getMockWalletData = () => ({
   address: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',

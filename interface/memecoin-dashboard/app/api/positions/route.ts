@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3002';
+const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
 
 const getMockPositions = () => [
   {
@@ -39,14 +39,34 @@ const getMockPositions = () => [
 
 export async function GET() {
   try {
-    const response = await fetch(`${BOT_API_URL}/api/positions`, {
+    const response = await fetch(`${BOT_API_URL}/api/positions/current`, {
       next: { revalidate: 0 },
       signal: AbortSignal.timeout(5000),
     });
 
     if (response.ok) {
       const data = await response.json();
-      return NextResponse.json({ success: true, data });
+      // Transform backend format to frontend format
+      if (data.success && data.data?.positions) {
+        const positions = data.data.positions.map((p: any) => ({
+          id: p.id,
+          tokenAddress: p.tokenAddress,
+          tokenName: p.tokenName || 'Unknown',
+          tokenSymbol: p.tokenSymbol || 'UNKNOWN',
+          entryPrice: p.entry?.price || 0,
+          currentPrice: p.current?.price || p.entry?.price || 0,
+          quantity: p.remainingAmount || p.entry?.amount || 0,
+          entryTime: p.entry?.time || new Date().toISOString(),
+          pnl: p.pnl?.usd || 0,
+          pnlPercent: p.pnl?.percent || 0,
+          stopLoss: p.stopLoss?.price || 0,
+          takeProfit: [],
+          convictionScore: p.entry?.conviction || 0,
+          smartWalletCount: p.smartWallets?.length || 0,
+        }));
+        return NextResponse.json({ success: true, data: positions });
+      }
+      return NextResponse.json({ success: true, data: [] });
     }
   } catch {
     // Backend not available

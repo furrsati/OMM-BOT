@@ -30,8 +30,8 @@ export function initializePostgres(): Pool {
     connectionString,
     max: 20, // Maximum pool size
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-    ssl: connectionString.includes('render.com') ? {
+    connectionTimeoutMillis: 10000, // 10 seconds - more resilient for cold starts
+    ssl: connectionString.includes('render.com') || connectionString.includes('dpg-') ? {
       rejectUnauthorized: false // Required for Render PostgreSQL
     } : false
   });

@@ -15,12 +15,14 @@ import {
   Settings,
   BarChart3,
   Power,
-  FileText
+  FileText,
+  Search
 } from "lucide-react"
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Controls", href: "/controls", icon: Power },
+  { name: "Token Scanner", href: "/scanner", icon: Search },
   { name: "Positions", href: "/positions", icon: TrendingUp },
   { name: "Trades", href: "/trades", icon: BarChart3 },
   { name: "Wallet", href: "/wallet", icon: Wallet },

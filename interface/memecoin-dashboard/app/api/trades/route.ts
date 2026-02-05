@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3002';
+const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
 
 const getMockTrades = () => ({
   trades: [
@@ -49,23 +49,60 @@ const getMockTrades = () => ({
   },
 });
 
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const filter = searchParams.get('filter') || 'all';
-  const time = searchParams.get('time') || 'all';
-
+export async function GET(_request: NextRequest) {
   try {
-    const response = await fetch(
-      `${BOT_API_URL}/api/trades?filter=${filter}&time=${time}`,
-      {
+    // Fetch both trades and stats from backend
+    const [tradesRes, statsRes] = await Promise.all([
+      fetch(`${BOT_API_URL}/api/trades/recent?limit=50`, {
         next: { revalidate: 0 },
         signal: AbortSignal.timeout(5000),
-      }
-    );
+      }),
+      fetch(`${BOT_API_URL}/api/trades/stats`, {
+        next: { revalidate: 0 },
+        signal: AbortSignal.timeout(5000),
+      }),
+    ]);
 
-    if (response.ok) {
-      const data = await response.json();
-      return NextResponse.json({ success: true, data });
+    if (tradesRes.ok && statsRes.ok) {
+      const tradesData = await tradesRes.json();
+      const statsData = await statsRes.json();
+
+      // Transform backend format to frontend format
+      const trades = (tradesData.data || []).map((t: any) => ({
+        id: t.id,
+        tokenAddress: t.tokenAddress,
+        tokenName: t.tokenName || 'Unknown',
+        tokenSymbol: t.tokenSymbol || 'UNK',
+        entryPrice: t.entry?.price || 0,
+        exitPrice: t.exit?.price || 0,
+        quantity: t.entry?.amount || 0,
+        entryTime: t.entry?.time || new Date().toISOString(),
+        exitTime: t.exit?.time || null,
+        pnl: t.profitLoss || 0,
+        pnlPercent: t.profitLossPercent || 0,
+        exitReason: t.exit?.reason || t.outcome || 'UNKNOWN',
+        convictionScore: t.convictionScore || 0,
+        smartWalletCount: 0,
+      }));
+
+      const stats = statsData.data || {};
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          trades,
+          stats: {
+            totalTrades: stats.totalTrades || 0,
+            winRate: stats.winRate ? stats.winRate / 100 : 0,
+            totalPnL: stats.totalPnL?.usd || 0,
+            avgWin: stats.avgWinner || 0,
+            avgLoss: stats.avgLoser ? -stats.avgLoser : 0,
+            profitFactor: stats.profitFactor || 0,
+            bestTrade: 0,
+            worstTrade: 0,
+          },
+        },
+      });
     }
   } catch {
     // Backend not available

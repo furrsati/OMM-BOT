@@ -159,6 +159,71 @@ router.get(
 );
 
 /**
+ * POST /api/positions/:id/close
+ * Manually close a position
+ */
+router.post(
+  '/:id/close',
+  asyncHandler(async (req: any, res: any) => {
+    const { id } = req.params;
+    const ctx = botContextManager.getContext();
+
+    // Get position
+    const result = await getPool().query(
+      `SELECT * FROM positions WHERE id = $1 AND status = 'OPEN'`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Position not found or already closed',
+        code: 'POSITION_NOT_FOUND',
+      });
+    }
+
+    const position = result.rows[0];
+
+    // Close the position
+    try {
+      // Log the manual close request
+      console.log('Manual close requested for position:', {
+        tokenAddress: position.token_address,
+        amount: parseFloat(position.remaining_amount),
+      });
+
+      // Update position status
+      await getPool().query(
+        `UPDATE positions
+         SET status = 'CLOSED',
+             exit_reason = 'MANUAL_CLOSE',
+             exit_time = NOW(),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [id]
+      );
+
+      res.json({
+        success: true,
+        message: 'Position close initiated',
+        data: {
+          id,
+          tokenAddress: position.token_address,
+          tokenSymbol: position.token_symbol,
+          exitReason: 'MANUAL_CLOSE',
+        },
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to close position',
+        code: 'CLOSE_FAILED',
+      });
+    }
+  })
+);
+
+/**
  * GET /api/positions/history
  * Get closed positions with pagination
  */

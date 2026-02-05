@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3002';
+const BOT_API_URL = process.env.BOT_API_URL || 'http://localhost:3001';
 
 const getMockWallets = () => [
   {
@@ -52,7 +52,9 @@ export async function GET() {
 
     if (response.ok) {
       const data = await response.json();
-      return NextResponse.json({ success: true, data });
+      if (data.success && data.data) {
+        return NextResponse.json({ success: true, data: data.data });
+      }
     }
   } catch {
     // Backend not available
