@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Power, Pause, Play, AlertTriangle, RefreshCw, Zap, Search } from 'lucide-react';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+import { API_URL } from '@/lib/api';
 
 interface BotStatus {
   isRunning: boolean;

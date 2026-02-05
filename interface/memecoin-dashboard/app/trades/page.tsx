@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { BarChart3, TrendingUp, TrendingDown, Filter, Download, RefreshCw } from 'lucide-react';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+import { API_URL } from '@/lib/api';
 
 interface Trade {
   id: string;

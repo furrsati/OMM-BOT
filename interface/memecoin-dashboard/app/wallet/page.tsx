@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Wallet, RefreshCw, Copy, Check, ExternalLink, ArrowUpRight, ArrowDownRight, Send, Download } from 'lucide-react';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+import { API_URL } from '@/lib/api';
 
 interface WalletBalance {
   sol: number;

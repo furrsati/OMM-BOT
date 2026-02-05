@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Shield, Plus, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Search } from 'lucide-react';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+import { API_URL } from '@/lib/api';
 
 interface BlacklistEntry {
   id: string;

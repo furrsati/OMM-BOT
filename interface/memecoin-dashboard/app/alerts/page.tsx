@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Bell, RefreshCw, Check, CheckCheck, Trash2, Filter, AlertTriangle, Info, AlertCircle, XCircle } from 'lucide-react';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+import { API_URL } from '@/lib/api';
 
 interface Alert {
   id: string;

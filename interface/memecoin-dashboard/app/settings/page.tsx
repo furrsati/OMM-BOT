@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Settings, Save, RefreshCw, RotateCcw, AlertTriangle } from 'lucide-react';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+import { API_URL } from '@/lib/api';
 
 interface BotSettings {
   // Position Sizing

@@ -18,14 +18,21 @@ export async function DELETE(
       const data = await response.json();
       return NextResponse.json(data);
     }
-  } catch {
-    // Backend not available
-  }
 
-  return NextResponse.json({
-    success: true,
-    message: `Wallet ${id} deleted`,
-  });
+    return NextResponse.json({
+      success: false,
+      error: 'Backend returned error',
+      isOffline: true,
+    }, { status: 503 });
+  } catch (error) {
+    console.error('Backend connection failed:', error);
+    return NextResponse.json({
+      success: false,
+      error: 'Backend unavailable',
+      message: 'Cannot connect to trading bot backend',
+      isOffline: true,
+    }, { status: 503 });
+  }
 }
 
 export async function PATCH(
@@ -48,12 +55,19 @@ export async function PATCH(
       const data = await response.json();
       return NextResponse.json(data);
     }
-  } catch {
-    // Backend not available
-  }
 
-  return NextResponse.json({
-    success: true,
-    message: `Wallet ${id} updated`,
-  });
+    return NextResponse.json({
+      success: false,
+      error: 'Backend returned error',
+      isOffline: true,
+    }, { status: 503 });
+  } catch (error) {
+    console.error('Backend connection failed:', error);
+    return NextResponse.json({
+      success: false,
+      error: 'Backend unavailable',
+      message: 'Cannot connect to trading bot backend',
+      isOffline: true,
+    }, { status: 503 });
+  }
 }
