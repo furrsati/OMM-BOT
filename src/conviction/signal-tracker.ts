@@ -14,9 +14,9 @@ import { Connection } from '@solana/web3.js';
 import { logger } from '../utils/logger';
 import { WalletManager } from '../discovery';
 import { PriceFeed } from '../market';
-import { SignalAggregator } from './signal-aggregator';
+import { SignalAggregator, AggregatedSignal } from './signal-aggregator';
 import { ConvictionScorer } from './conviction-scorer';
-import { EntryDecisionEngine } from './entry-decision';
+import { EntryDecisionEngine, EntryDecision } from './entry-decision';
 
 export interface TrackedOpportunity {
   tokenAddress: string;
@@ -44,6 +44,9 @@ export class SignalTracker {
   private isRunning: boolean = false;
   private monitorInterval: NodeJS.Timeout | null = null;
 
+  // Callback for approved entries (Phase 5 integration)
+  private onEntryApprovedCallback?: (decision: EntryDecision, signal: AggregatedSignal) => void;
+
   constructor(
     connection: Connection,
     walletManager: WalletManager,
@@ -58,6 +61,14 @@ export class SignalTracker {
     this.signalAggregator = signalAggregator;
     this.convictionScorer = convictionScorer;
     this.entryDecision = entryDecision;
+  }
+
+  /**
+   * Register callback for when entries are approved
+   */
+  onEntryApproved(callback: (decision: EntryDecision, signal: AggregatedSignal) => void): void {
+    this.onEntryApprovedCallback = callback;
+    logger.info('Entry approved callback registered');
   }
 
   /**
@@ -209,13 +220,14 @@ export class SignalTracker {
 
         opportunity.status = 'ENTERED';
 
-        // TODO: Phase 5 - Execute trade via Execution Engine
-        // For now, just log the decision
-        logger.info('📋 Trade queued for execution (Phase 5)', {
-          token: opportunity.tokenAddress,
-          action: 'BUY',
-          positionSize: decision.positionSizePercent + '%'
-        });
+        // Phase 5: Execute trade via Execution Engine
+        if (this.onEntryApprovedCallback) {
+          this.onEntryApprovedCallback(decision, aggregatedSignal);
+        } else {
+          logger.warn('No execution callback registered - trade not executed', {
+            token: opportunity.tokenAddress.slice(0, 8)
+          });
+        }
 
       } else {
         logger.warn(`❌ Entry rejected for ${opportunity.tokenAddress.slice(0, 8)}...`, {

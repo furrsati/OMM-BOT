@@ -8,12 +8,15 @@
  * - Level 2 (Weight Optimizer): Learning what factors matter most
  * - Level 3 (Parameter Tuner): Optimizing numerical trading parameters
  * - Level 4 (Meta-Learner): Evaluating if learning is working
+ * - Learning Scheduler: Coordinates all learning cycles
  *
- * Phase 1: SKELETON implementation - structure in place, full logic in Phase 7
+ * Phase 7: COMPLETE IMPLEMENTATION
  */
 
 export { PatternMatcher } from './pattern-matcher';
 export { WeightOptimizer } from './weight-optimizer';
 export { ParameterTuner } from './parameter-tuner';
 export { MetaLearner } from './meta-learner';
+export { LearningScheduler } from './learning-scheduler';
 export type { LearningSnapshot, PerformanceMetrics, LearningImpact } from './meta-learner';
+export type { LearningSchedulerStatus } from './learning-scheduler';
