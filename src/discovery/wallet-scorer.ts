@@ -14,9 +14,8 @@
  * - Tier 3: Next 20-40 wallets (promising but unproven)
  */
 
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
 import { logger } from '../utils/logger';
-import { getRedisClient } from '../db/redis';
 import { SmartWallet } from '../types';
 import { query } from '../db/postgres';
 
@@ -34,11 +33,9 @@ interface WalletPerformance {
 
 export class WalletScorer {
   private connection: Connection;
-  private redis: ReturnType<typeof getRedisClient>;
 
   constructor(connection: Connection) {
     this.connection = connection;
-    this.redis = getRedisClient();
   }
 
   /**
@@ -149,59 +146,62 @@ export class WalletScorer {
   /**
    * Get wallet performance data
    */
-  private async getWalletPerformance(walletAddress: string): Promise<WalletPerformance | null> {
+  private async getWalletPerformance(_walletAddress: string): Promise<WalletPerformance | null> {
     try {
+      // REDIS REMOVED - caching disabled
       // Get cached data
-      const key = `alpha_wallet:${walletAddress}`;
-      const cached = await this.redis.get(key);
+      // const key = `alpha_wallet:${walletAddress}`;
+      // const cached = await this.redis.get(key);
 
-      if (!cached) {
-        return null;
-      }
+      // if (!cached) {
+      //   return null;
+      // }
 
-      const data = JSON.parse(cached);
+      // const data = JSON.parse(cached);
 
       // Analyze performance for each token
-      let wins = 0;
-      let losses = 0;
-      let totalReturn = 0;
-      let totalHoldTime = 0;
+      // let wins = 0;
+      // let losses = 0;
+      // let totalReturn = 0;
+      // let totalHoldTime = 0;
 
-      for (const tokenAddress of data.tokens) {
-        // Get token performance (STUB - needs price data integration)
-        const tokenPerformance = await this.getTokenPerformance(
-          walletAddress,
-          tokenAddress
-        );
+      // for (const tokenAddress of data.tokens) {
+      //   // Get token performance (STUB - needs price data integration)
+      //   const tokenPerformance = await this.getTokenPerformance(
+      //     walletAddress,
+      //     tokenAddress
+      //   );
 
-        if (tokenPerformance) {
-          if (tokenPerformance.multiplier >= 2) {
-            wins++;
-          } else {
-            losses++;
-          }
+      //   if (tokenPerformance) {
+      //     if (tokenPerformance.multiplier >= 2) {
+      //       wins++;
+      //     } else {
+      //       losses++;
+      //     }
 
-          totalReturn += tokenPerformance.multiplier;
-          totalHoldTime += tokenPerformance.holdTime;
-        }
-      }
+      //     totalReturn += tokenPerformance.multiplier;
+      //     totalHoldTime += tokenPerformance.holdTime;
+      //   }
+      // }
 
-      const totalTrades = wins + losses;
-      const winRate = totalTrades > 0 ? wins / totalTrades : 0;
-      const averageReturn = totalTrades > 0 ? totalReturn / totalTrades : 0;
-      const averageHoldTime = totalTrades > 0 ? totalHoldTime / totalTrades : 0;
+      // const totalTrades = wins + losses;
+      // const winRate = totalTrades > 0 ? wins / totalTrades : 0;
+      // const averageReturn = totalTrades > 0 ? totalReturn / totalTrades : 0;
+      // const averageHoldTime = totalTrades > 0 ? totalHoldTime / totalTrades : 0;
 
-      return {
-        address: walletAddress,
-        tokensEntered: data.tokens,
-        wins,
-        losses,
-        totalReturn,
-        averageReturn,
-        winRate,
-        lastActiveTimestamp: data.lastUpdated,
-        averageHoldTime
-      };
+      // return {
+      //   address: walletAddress,
+      //   tokensEntered: data.tokens,
+      //   wins,
+      //   losses,
+      //   totalReturn,
+      //   averageReturn,
+      //   winRate,
+      //   lastActiveTimestamp: data.lastUpdated,
+      //   averageHoldTime
+      // };
+
+      return null; // Redis disabled, no cached data available
 
     } catch (error: any) {
       logger.debug('Error getting wallet performance', { error: error.message });
@@ -215,8 +215,8 @@ export class WalletScorer {
    * STUB: In production, this would query price data service
    */
   private async getTokenPerformance(
-    walletAddress: string,
-    tokenAddress: string
+    _walletAddress: string,
+    _tokenAddress: string
   ): Promise<{ multiplier: number; holdTime: number } | null> {
     try {
       // STUB: Query price data for this wallet's entry/exit
@@ -367,8 +367,10 @@ export class WalletScorer {
    */
   private async getAlphaWallets(): Promise<string[]> {
     try {
-      const keys = await this.redis.keys('alpha_wallet:*');
-      return keys.map(key => key.replace('alpha_wallet:', ''));
+      // REDIS REMOVED - caching disabled
+      // const keys = await this.redis.keys('alpha_wallet:*');
+      // return keys.map(key => key.replace('alpha_wallet:', ''));
+      return []; // Redis disabled, no cached wallets available
     } catch (error: any) {
       logger.error('Error getting alpha wallets', { error: error.message });
       return [];

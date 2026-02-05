@@ -13,10 +13,9 @@
  * 3. On-chain pool state parsing (fallback)
  */
 
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
 import axios from 'axios';
 import { logger } from '../utils/logger';
-import { getRedisClient } from '../db/redis';
 
 interface TokenPrice {
   tokenAddress: string;
@@ -38,7 +37,6 @@ interface PriceHistory {
 
 export class PriceFeed {
   private connection: Connection;
-  private redis: ReturnType<typeof getRedisClient>;
   private priceCache: Map<string, TokenPrice> = new Map();
   private updateIntervalMs: number = 10000; // 10 seconds
   private monitoredTokens: Set<string> = new Set();
@@ -46,7 +44,6 @@ export class PriceFeed {
 
   constructor(connection: Connection) {
     this.connection = connection;
-    this.redis = getRedisClient();
   }
 
   /**
@@ -114,22 +111,24 @@ export class PriceFeed {
   /**
    * Get price history for a token
    */
-  async getPriceHistory(tokenAddress: string, hours: number = 24): Promise<PriceHistory | null> {
+  async getPriceHistory(tokenAddress: string, _hours: number = 24): Promise<PriceHistory | null> {
     try {
-      const key = `price_history:${tokenAddress}`;
-      const data = await this.redis.get(key);
+      // REDIS REMOVED - caching disabled
+      // const key = `price_history:${tokenAddress}`;
+      // const data = await this.redis.get(key);
 
-      if (!data) {
-        return null;
-      }
+      // if (!data) {
+      //   return null;
+      // }
 
-      const history: PriceHistory = JSON.parse(data);
+      // const history: PriceHistory = JSON.parse(data);
 
-      // Filter to requested time window
-      const cutoff = Date.now() - (hours * 60 * 60 * 1000);
-      history.prices = history.prices.filter(p => p.time > cutoff);
+      // // Filter to requested time window
+      // const cutoff = Date.now() - (hours * 60 * 60 * 1000);
+      // history.prices = history.prices.filter(p => p.time > cutoff);
 
-      return history;
+      // return history;
+      return null; // Redis disabled, no price history available
 
     } catch (error: any) {
       logger.error('Error getting price history', { error: error.message });
@@ -319,54 +318,55 @@ export class PriceFeed {
    */
   private async savePriceToHistory(price: TokenPrice): Promise<void> {
     try {
-      const key = `price_history:${price.tokenAddress}`;
+      // REDIS REMOVED - caching disabled
+      // const key = `price_history:${price.tokenAddress}`;
 
-      // Get existing history
-      const existing = await this.redis.get(key);
-      let history: PriceHistory;
+      // // Get existing history
+      // const existing = await this.redis.get(key);
+      // let history: PriceHistory;
 
-      if (existing) {
-        history = JSON.parse(existing);
-      } else {
-        history = {
-          prices: [],
-          ath: price.priceUSD,
-          athTime: price.timestamp,
-          localHigh: price.priceUSD,
-          localHighTime: price.timestamp
-        };
-      }
+      // if (existing) {
+      //   history = JSON.parse(existing);
+      // } else {
+      //   history = {
+      //     prices: [],
+      //     ath: price.priceUSD,
+      //     athTime: price.timestamp,
+      //     localHigh: price.priceUSD,
+      //     localHighTime: price.timestamp
+      //   };
+      // }
 
-      // Add new price point
-      history.prices.push({
-        time: price.timestamp,
-        price: price.priceUSD
-      });
+      // // Add new price point
+      // history.prices.push({
+      //   time: price.timestamp,
+      //   price: price.priceUSD
+      // });
 
-      // Keep only last 48 hours
-      const cutoff = Date.now() - (48 * 60 * 60 * 1000);
-      history.prices = history.prices.filter(p => p.time > cutoff);
+      // // Keep only last 48 hours
+      // const cutoff = Date.now() - (48 * 60 * 60 * 1000);
+      // history.prices = history.prices.filter(p => p.time > cutoff);
 
-      // Update ATH
-      if (price.priceUSD > history.ath) {
-        history.ath = price.priceUSD;
-        history.athTime = price.timestamp;
-      }
+      // // Update ATH
+      // if (price.priceUSD > history.ath) {
+      //   history.ath = price.priceUSD;
+      //   history.athTime = price.timestamp;
+      // }
 
-      // Update local high (last 4 hours)
-      const fourHoursAgo = Date.now() - (4 * 60 * 60 * 1000);
-      const recentPrices = history.prices.filter(p => p.time > fourHoursAgo);
-      if (recentPrices.length > 0) {
-        const localMax = Math.max(...recentPrices.map(p => p.price));
-        if (localMax > history.localHigh || price.timestamp - history.localHighTime > 4 * 60 * 60 * 1000) {
-          history.localHigh = localMax;
-          const localMaxPoint = recentPrices.find(p => p.price === localMax);
-          history.localHighTime = localMaxPoint?.time || price.timestamp;
-        }
-      }
+      // // Update local high (last 4 hours)
+      // const fourHoursAgo = Date.now() - (4 * 60 * 60 * 1000);
+      // const recentPrices = history.prices.filter(p => p.time > fourHoursAgo);
+      // if (recentPrices.length > 0) {
+      //   const localMax = Math.max(...recentPrices.map(p => p.price));
+      //   if (localMax > history.localHigh || price.timestamp - history.localHighTime > 4 * 60 * 60 * 1000) {
+      //     history.localHigh = localMax;
+      //     const localMaxPoint = recentPrices.find(p => p.price === localMax);
+      //     history.localHighTime = localMaxPoint?.time || price.timestamp;
+      //   }
+      // }
 
-      // Save back to Redis (expire after 7 days)
-      await this.redis.setEx(key, 7 * 24 * 60 * 60, JSON.stringify(history));
+      // // Save back to Redis (expire after 7 days)
+      // await this.redis.setEx(key, 7 * 24 * 60 * 60, JSON.stringify(history));
 
     } catch (error: any) {
       logger.debug('Error saving price history', { error: error.message });

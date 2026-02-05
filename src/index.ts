@@ -3,8 +3,8 @@ import { Connection, Keypair } from '@solana/web3.js';
 import { logger } from './utils/logger';
 import { getRPCManager } from './config/rpc.config';
 import { initializePostgres, initializeSchema, healthCheck as dbHealthCheck, closePool } from './db/postgres';
-import { initializeRedis, healthCheck as redisHealthCheck, closeRedis } from './db/redis';
-import { PatternMatcher, WeightOptimizer, ParameterTuner, MetaLearner, LearningScheduler } from './learning';
+import { initializeCache, healthCheck as cacheHealthCheck, cleanupExpiredCache } from './db/cache';
+import { PatternMatcher, WeightOptimizer, LearningScheduler } from './learning';
 import { OnChainSocialIntelligence } from './social/on-chain-social-intelligence';
 import { HypeDetector } from './social/hype-detector';
 import { WalletScanner, WalletManager } from './discovery';
@@ -112,14 +112,22 @@ async function main() {
     await initializeSchema();
     logger.info('✅ Database schema ready');
 
-    // Initialize Redis
-    logger.info('⚡ Initializing Redis...');
-    await initializeRedis();
-    const redisHealthy = await redisHealthCheck();
-    if (!redisHealthy) {
-      throw new Error('Redis health check failed');
+    // Initialize Cache (PostgreSQL-based)
+    logger.info('💾 Initializing Cache...');
+    await initializeCache();
+    const cacheHealthy = await cacheHealthCheck();
+    if (!cacheHealthy) {
+      throw new Error('Cache health check failed');
     }
-    logger.info('✅ Redis connected');
+    logger.info('✅ Cache initialized (PostgreSQL)');
+
+    // Start periodic cache cleanup (every 5 minutes)
+    setInterval(() => {
+      cleanupExpiredCache().catch(error => {
+        logger.error('Cache cleanup error', { error: error.message });
+      });
+    }, 5 * 60 * 1000); // 5 minutes
+
     // ============================================================
     // PHASE 7: INITIALIZE LEARNING ENGINE (COMPLETE)
     // ============================================================
@@ -699,7 +707,6 @@ async function main() {
 
         // Close database connections
         await closePool();
-        await closeRedis();
 
         logger.info('✅ Shutdown complete');
         process.exit(0);

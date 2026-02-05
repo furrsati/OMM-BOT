@@ -1,4 +1,4 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
 import { logger } from '../utils/logger';
 
 /**
@@ -187,7 +187,7 @@ export class OnChainSocialIntelligence {
    * Proven winners buying = good. New/losing wallets = bad.
    */
   private async analyzeEarlyBuyerQuality(
-    tokenAddress: string,
+        _tokenAddress: string,
     buyers: BuyerProfile[]
   ): Promise<number> {
     if (buyers.length === 0) return 0;
@@ -296,7 +296,7 @@ export class OnChainSocialIntelligence {
    * Analyzes the overall holder base quality.
    * Good holders = previous winners. Bad holders = rug participants.
    */
-  private async analyzeHolderNetworkQuality(tokenAddress: string): Promise<number> {
+  private async analyzeHolderNetworkQuality(_tokenAddress: string): Promise<number> {
     // TODO: Implement full holder analysis (Phase 2)
     // For now, return neutral score
     return 12;
@@ -310,8 +310,8 @@ export class OnChainSocialIntelligence {
    * Get recent buyers for a token (last N minutes)
    */
   private async getRecentBuyers(
-    tokenAddress: string,
-    minutes: number
+        _tokenAddress: string,
+        _minutes: number
   ): Promise<BuyerProfile[]> {
     // TODO: Implement in Phase 2 with actual RPC calls
     // This will use getSignaturesForAddress to get recent transactions
@@ -352,7 +352,7 @@ export class OnChainSocialIntelligence {
   /**
    * Detect wallet clusters (wallets that buy together)
    */
-  private detectWalletClusters(buyers: BuyerProfile[]): number {
+  private detectWalletClusters(_buyers: BuyerProfile[]): number {
     // TODO: Implement graph analysis to find connected wallet groups
     return 0;
   }
@@ -360,7 +360,7 @@ export class OnChainSocialIntelligence {
   /**
    * Analyze wallet connections (how related are the buyers?)
    */
-  private analyzeWalletConnections(buyers: BuyerProfile[]): number {
+  private analyzeWalletConnections(_buyers: BuyerProfile[]): number {
     // TODO: Check if buyers funded from same source, part of same cluster, etc.
     // For now, return neutral
     return 5;

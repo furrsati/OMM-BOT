@@ -14,7 +14,6 @@ import { BuyExecutor, BuyExecutionResult } from './buy-executor';
 import { SellExecutor, SellExecutionResult, SellOrder } from './sell-executor';
 import { EntryDecision, EntryDecisionEngine } from '../conviction/entry-decision';
 import { AggregatedSignal } from '../conviction/signal-aggregator';
-import { query } from '../db/postgres';
 
 interface PendingBuyOrder {
   decision: EntryDecision;

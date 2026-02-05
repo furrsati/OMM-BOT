@@ -102,7 +102,7 @@ export class HypeDetector {
    * Calculate holder growth rate from on-chain data
    * This requires your RPC connection to query token accounts
    */
-  private async calculateHolderGrowthRate(tokenAddress: string): Promise<number> {
+  private async calculateHolderGrowthRate(_tokenAddress: string): Promise<number> {
     // TODO: Implement using Solana RPC
     // For now, return 0 (will implement in Phase 2)
     return 0;
@@ -111,7 +111,7 @@ export class HypeDetector {
   /**
    * Calculate transaction velocity (txs per minute)
    */
-  private async calculateTransactionVelocity(tokenAddress: string): Promise<number> {
+  private async calculateTransactionVelocity(_tokenAddress: string): Promise<number> {
     // TODO: Implement using Solana RPC to count recent transactions
     // For now, return 0 (will implement in Phase 2)
     return 0;
@@ -120,7 +120,7 @@ export class HypeDetector {
   /**
    * Count unique buyers in last 15 minutes
    */
-  private async getUniqueBuyersLast15Min(tokenAddress: string): Promise<number> {
+  private async getUniqueBuyersLast15Min(_tokenAddress: string): Promise<number> {
     // TODO: Implement using Solana RPC
     // For now, return 0 (will implement in Phase 2)
     return 0;

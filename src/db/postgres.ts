@@ -31,6 +31,9 @@ export function initializePostgres(): Pool {
     max: 20, // Maximum pool size
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000,
+    ssl: connectionString.includes('render.com') ? {
+      rejectUnauthorized: false // Required for Render PostgreSQL
+    } : false
   });
 
   // Handle pool errors
@@ -124,20 +127,60 @@ export async function transaction<T>(
  */
 export async function initializeSchema(): Promise<void> {
   try {
+    // First, run the fix script to ensure all tables exist with IF NOT EXISTS
+    const fixScriptPath = join(__dirname, '../../database/fix_missing_tables.sql');
+    try {
+      const fixScript = readFileSync(fixScriptPath, 'utf-8');
+      await query(fixScript);
+      logger.info('Database schema fix applied successfully');
+    } catch (error: any) {
+      // Fix script might not exist or have errors, continue anyway
+      logger.debug('Fix script not applied', { error: error.message });
+    }
+
+    // Check if core tables exist
+    const tableCheck = await query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = 'cache'
+      ) as cache_exists,
+      EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = 'smart_wallets'
+      ) as smart_wallets_exists
+    `);
+
+    const { cache_exists, smart_wallets_exists } = tableCheck.rows[0];
+
+    // If core tables exist, we're good
+    if (cache_exists && smart_wallets_exists) {
+      logger.info('Database schema already exists');
+      return;
+    }
+
+    // If not, try to run the main schema
     const schemaPath = join(__dirname, '../../database/schema.sql');
     const schema = readFileSync(schemaPath, 'utf-8');
 
     logger.info('Loading database schema...');
-    await query(schema);
-    logger.info('Database schema initialized successfully');
-  } catch (error: any) {
-    // If tables already exist, that's okay
-    if (error.message.includes('already exists')) {
-      logger.info('Database schema already exists');
-    } else {
-      logger.error('Failed to initialize database schema', { error: error.message });
-      throw error;
+
+    try {
+      await query(schema);
+      logger.info('Database schema initialized successfully');
+    } catch (error: any) {
+      // If tables already exist, that's fine
+      if (error.message.includes('already exists')) {
+        logger.info('Database schema already exists');
+      } else {
+        logger.error('Failed to initialize database schema', { error: error.message });
+        throw error;
+      }
     }
+  } catch (error: any) {
+    logger.error('Failed to initialize database schema', { error: error.message });
+    throw error;
   }
 }
 

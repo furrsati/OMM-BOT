@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../middleware';
 import { botContextManager } from '../services/bot-context';
 import { healthCheck as dbHealthCheck } from '../../db/postgres';
-import { healthCheck as redisHealthCheck } from '../../db/redis';
+import { healthCheck as cacheHealthCheck } from '../../db/cache';
 
 const router = Router();
 
@@ -28,11 +28,11 @@ router.get(
     // Check Database
     const dbHealthy = await dbHealthCheck();
 
-    // Check Redis
-    const redisHealthy = await redisHealthCheck();
+    // Check Cache
+    const cacheHealthy = await cacheHealthCheck();
 
     // Overall health
-    const isHealthy = rpcHealthy && dbHealthy && redisHealthy;
+    const isHealthy = rpcHealthy && dbHealthy && cacheHealthy;
 
     res.status(isHealthy ? 200 : 503).json({
       success: true,
@@ -48,8 +48,8 @@ router.get(
           database: {
             healthy: dbHealthy,
           },
-          redis: {
-            healthy: redisHealthy,
+          cache: {
+            healthy: cacheHealthy,
           },
         },
       },

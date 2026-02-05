@@ -12,7 +12,6 @@
 
 import { logger } from '../utils/logger';
 import { query } from '../db/postgres';
-import { Position, TakeProfitLevel } from '../types';
 
 export interface PositionData {
   id?: string;

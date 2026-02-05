@@ -11,7 +11,7 @@
  * Output: A comprehensive signal object ready for conviction scoring
  */
 
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
 import { logger } from '../utils/logger';
 import { WalletManager } from '../discovery';
 import { SafetyScorer, SafetyAnalysis } from '../safety';

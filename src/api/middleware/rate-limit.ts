@@ -17,7 +17,7 @@ export const apiLimiter = rateLimit({
     error: 'Too many requests from this IP, please try again later.',
     code: 'RATE_LIMIT_EXCEEDED',
   },
-  skip: (req) => {
+  skip: (_req) => {
     // Skip rate limiting in development
     return process.env.NODE_ENV === 'development';
   },
@@ -34,7 +34,7 @@ export const controlLimiter = rateLimit({
     error: 'Too many control requests, please try again later.',
     code: 'CONTROL_RATE_LIMIT_EXCEEDED',
   },
-  skip: (req) => {
+  skip: (_req) => {
     return process.env.NODE_ENV === 'development';
   },
 });

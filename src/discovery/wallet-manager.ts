@@ -137,7 +137,7 @@ export class WalletManager {
   /**
    * Record a wallet signal (wallet entered a token)
    */
-  async recordWalletSignal(walletAddress: string, tokenAddress: string): Promise<void> {
+  async recordWalletSignal(walletAddress: string, _tokenAddress: string): Promise<void> {
     if (!this.walletStats.has(walletAddress)) {
       this.walletStats.set(walletAddress, {
         address: walletAddress,

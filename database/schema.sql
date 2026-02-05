@@ -267,6 +267,31 @@ CREATE TRIGGER update_trades_updated_at BEFORE UPDATE ON trades
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- =====================================================
+-- CACHE TABLES (Replace Redis)
+-- =====================================================
+
+-- Generic cache table for key-value storage with expiration
+CREATE TABLE cache (
+  key VARCHAR(255) PRIMARY KEY,
+  value TEXT NOT NULL,
+  expires_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_cache_expires_at ON cache(expires_at);
+
+-- Rate limiting counters
+CREATE TABLE rate_limits (
+  identifier VARCHAR(255) PRIMARY KEY,
+  count INT NOT NULL DEFAULT 1,
+  window_start TIMESTAMP NOT NULL DEFAULT NOW(),
+  window_seconds INT NOT NULL,
+  expires_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_rate_limits_expires_at ON rate_limits(expires_at);
+
+-- =====================================================
 -- INITIAL DEFAULT PARAMETERS
 -- =====================================================
 INSERT INTO bot_parameters (

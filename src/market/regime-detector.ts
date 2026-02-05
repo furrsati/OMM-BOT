@@ -16,7 +16,6 @@
 
 import axios from 'axios';
 import { logger } from '../utils/logger';
-import { getRedisClient } from '../db/redis';
 import { MarketRegime } from '../types';
 
 interface AssetPrice {
@@ -39,13 +38,11 @@ interface RegimeState {
 }
 
 export class RegimeDetector {
-  private redis: ReturnType<typeof getRedisClient>;
   private currentRegime: RegimeState;
   private isRunning: boolean = false;
   private updateIntervalMs: number = 60000; // 1 minute
 
   constructor() {
-    this.redis = getRedisClient();
     this.currentRegime = {
       regime: 'FULL',
       solTrend: 'stable',
@@ -283,16 +280,17 @@ export class RegimeDetector {
         return null;
       }
 
+      // REDIS REMOVED - caching disabled
       // Try cache first
-      const cacheKey = `asset_price:${symbol}`;
-      const cached = await this.redis.get(cacheKey);
-      if (cached) {
-        const data = JSON.parse(cached);
-        // If cache is less than 1 minute old, use it
-        if (Date.now() - data.timestamp < 60000) {
-          return data;
-        }
-      }
+      // const cacheKey = `asset_price:${symbol}`;
+      // const cached = await this.redis.get(cacheKey);
+      // if (cached) {
+      //   const data = JSON.parse(cached);
+      //   // If cache is less than 1 minute old, use it
+      //   if (Date.now() - data.timestamp < 60000) {
+      //     return data;
+      //   }
+      // }
 
       // Fetch from CoinGecko
       const response = await axios.get(
@@ -322,8 +320,9 @@ export class RegimeDetector {
         timestamp: Date.now()
       };
 
+      // REDIS REMOVED - caching disabled
       // Cache for 1 minute
-      await this.redis.setEx(cacheKey, 60, JSON.stringify(assetPrice));
+      // await this.redis.setEx(cacheKey, 60, JSON.stringify(assetPrice));
 
       return assetPrice;
 
@@ -343,11 +342,12 @@ export class RegimeDetector {
    */
   private async cacheRegime(): Promise<void> {
     try {
-      await this.redis.setEx(
-        'market_regime',
-        300, // 5 minutes
-        JSON.stringify(this.currentRegime)
-      );
+      // REDIS REMOVED - caching disabled
+      // await this.redis.setEx(
+      //   'market_regime',
+      //   300, // 5 minutes
+      //   JSON.stringify(this.currentRegime)
+      // );
     } catch (error: any) {
       logger.debug('Error caching regime', { error: error.message });
     }
@@ -358,11 +358,12 @@ export class RegimeDetector {
    */
   async loadRegime(): Promise<void> {
     try {
-      const cached = await this.redis.get('market_regime');
-      if (cached) {
-        this.currentRegime = JSON.parse(cached);
-        logger.info(`Loaded cached regime: ${this.currentRegime.regime}`);
-      }
+      // REDIS REMOVED - caching disabled
+      // const cached = await this.redis.get('market_regime');
+      // if (cached) {
+      //   this.currentRegime = JSON.parse(cached);
+      //   logger.info(`Loaded cached regime: ${this.currentRegime.regime}`);
+      // }
     } catch (error: any) {
       logger.debug('Error loading cached regime', { error: error.message });
     }

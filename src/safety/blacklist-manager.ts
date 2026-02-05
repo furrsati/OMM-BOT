@@ -17,9 +17,7 @@
 
 import { Connection, PublicKey } from '@solana/web3.js';
 import { logger } from '../utils/logger';
-import { getRedisClient } from '../db/redis';
 import { query } from '../db/postgres';
-import { BlacklistEntry } from '../types';
 
 export interface BlacklistCheckResult {
   isBlacklisted: boolean;
@@ -30,12 +28,10 @@ export interface BlacklistCheckResult {
 
 export class BlacklistManager {
   private connection: Connection;
-  private redis: ReturnType<typeof getRedisClient>;
   private cache: Map<string, boolean> = new Map();
 
   constructor(connection: Connection) {
     this.connection = connection;
-    this.redis = getRedisClient();
   }
 
   /**
@@ -110,12 +106,13 @@ export class BlacklistManager {
       // Add to cache
       this.cache.set(address, true);
 
+      // REDIS REMOVED - caching disabled
       // Add to Redis with 30-day expiry
-      await this.redis.setEx(
-        `blacklist:${address}`,
-        30 * 24 * 60 * 60,
-        JSON.stringify({ type, reason, depth, timestamp: Date.now() })
-      );
+      // await this.redis.setEx(
+      //   `blacklist:${address}`,
+      //   30 * 24 * 60 * 60,
+      //   JSON.stringify({ type, reason, depth, timestamp: Date.now() })
+      // );
 
     } catch (error: any) {
       logger.error('Error adding to blacklist', { error: error.message });
@@ -260,18 +257,19 @@ export class BlacklistManager {
       };
     }
 
+    // REDIS REMOVED - caching disabled
     // Check Redis
-    const cached = await this.redis.get(`blacklist:${address}`);
-    if (cached) {
-      const data = JSON.parse(cached);
-      this.cache.set(address, true); // Update memory cache
-      return {
-        isBlacklisted: true,
-        reason: data.reason,
-        depth: 0,
-        blacklistedAddress: address
-      };
-    }
+    // const cached = await this.redis.get(`blacklist:${address}`);
+    // if (cached) {
+    //   const data = JSON.parse(cached);
+    //   this.cache.set(address, true); // Update memory cache
+    //   return {
+    //     isBlacklisted: true,
+    //     reason: data.reason,
+    //     depth: 0,
+    //     blacklistedAddress: address
+    //   };
+    // }
 
     // Check database
     try {

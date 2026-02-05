@@ -1,5 +1,4 @@
-import { logger, logLearningEngineAdjustment } from '../utils/logger';
-import { db } from '../db/postgres';
+import { logger } from '../utils/logger';
 import type { Trade } from '../types';
 
 /**
@@ -56,7 +55,7 @@ export class ParameterTuner {
   /**
    * Optimize dip depth entry range
    */
-  private async optimizeDipDepth(trades: Trade[]): Promise<void> {
+  private async optimizeDipDepth(_trades: Trade[]): Promise<void> {
     logger.debug('Analyzing optimal dip depth (STUB)');
 
     // STUB: Log only
@@ -72,7 +71,7 @@ export class ParameterTuner {
   /**
    * Optimize smart wallet count threshold
    */
-  private async optimizeWalletCountThreshold(trades: Trade[]): Promise<void> {
+  private async optimizeWalletCountThreshold(_trades: Trade[]): Promise<void> {
     logger.debug('Analyzing optimal wallet count threshold (STUB)');
 
     // STUB: Log only
@@ -85,7 +84,7 @@ export class ParameterTuner {
   /**
    * Optimize token age at entry
    */
-  private async optimizeTokenAge(trades: Trade[]): Promise<void> {
+  private async optimizeTokenAge(_trades: Trade[]): Promise<void> {
     logger.debug('Analyzing optimal token age (STUB)');
 
     // STUB: Log only
@@ -125,7 +124,7 @@ export class ParameterTuner {
   /**
    * Optimize take-profit levels
    */
-  private async optimizeTakeProfitLevels(trades: Trade[]): Promise<void> {
+  private async optimizeTakeProfitLevels(_trades: Trade[]): Promise<void> {
     logger.debug('Analyzing optimal take-profit levels (STUB)');
 
     // STUB: Log only
@@ -150,7 +149,7 @@ export class ParameterTuner {
    *  - HARD FLOOR: Stop-loss can never be wider than -35%
    *  - HARD CEILING: Stop-loss can never be tighter than -12%"
    */
-  private async optimizeStopLossLevels(trades: Trade[]): Promise<void> {
+  private async optimizeStopLossLevels(_trades: Trade[]): Promise<void> {
     logger.debug('Analyzing optimal stop-loss levels (STUB)');
 
     // STUB: Log only
@@ -163,7 +162,7 @@ export class ParameterTuner {
   /**
    * Optimize trailing stop distances
    */
-  private async optimizeTrailingStops(trades: Trade[]): Promise<void> {
+  private async optimizeTrailingStops(_trades: Trade[]): Promise<void> {
     logger.debug('Analyzing optimal trailing stop distances (STUB)');
 
     // STUB: Log only
@@ -176,7 +175,7 @@ export class ParameterTuner {
   /**
    * Optimize time-based stop duration
    */
-  private async optimizeTimeBasedStop(trades: Trade[]): Promise<void> {
+  private async optimizeTimeBasedStop(_trades: Trade[]): Promise<void> {
     logger.debug('Analyzing optimal time-based stop duration (STUB)');
 
     // STUB: Log only

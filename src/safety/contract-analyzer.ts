@@ -13,7 +13,7 @@
  * All checks return specific scores that feed into the Safety Scorer.
  */
 
-import { Connection, PublicKey, AccountInfo } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { getMint, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { logger } from '../utils/logger';
 

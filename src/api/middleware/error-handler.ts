@@ -31,7 +31,12 @@ export const errorHandler = (
   const statusCode = err.statusCode || 500;
 
   // Don't expose stack traces in production
-  const errorResponse: any = {
+  const errorResponse: {
+    success: boolean;
+    error: string;
+    code: string;
+    stack?: string;
+  } = {
     success: false,
     error: err.message || 'Internal Server Error',
     code: err.code || 'INTERNAL_ERROR',
@@ -68,7 +73,9 @@ export const notFoundHandler = (
  *
  * Wraps async route handlers to catch errors and pass to error handler
  */
-export const asyncHandler = (fn: Function) => {
+export const asyncHandler = (
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
+) => {
   return (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };

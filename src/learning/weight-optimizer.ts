@@ -1,5 +1,4 @@
-import { logger, logLearningEngineAdjustment } from '../utils/logger';
-import { db } from '../db/postgres';
+import { logger } from '../utils/logger';
 import type { Trade, CategoryWeights } from '../types';
 
 /**

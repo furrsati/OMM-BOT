@@ -3,7 +3,7 @@ import { db } from '../db/postgres';
 import { PatternMatcher } from './pattern-matcher';
 import { WeightOptimizer } from './weight-optimizer';
 import { ParameterTuner } from './parameter-tuner';
-import { MetaLearner, type LearningSnapshot } from './meta-learner';
+import { MetaLearner } from './meta-learner';
 import type { Trade } from '../types';
 
 /**

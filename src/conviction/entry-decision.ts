@@ -14,7 +14,6 @@
 import { logger } from '../utils/logger';
 import { AggregatedSignal } from './signal-aggregator';
 import { ConvictionScore } from './conviction-scorer';
-import { query } from '../db/postgres';
 
 export interface EntryDecision {
   shouldEnter: boolean;

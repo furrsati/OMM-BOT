@@ -408,7 +408,7 @@ export class PatternMatcher {
    *
    * Returns danger patterns with high confidence that match the current trade setup
    */
-  async checkForDangerPatterns(fingerprint: TradeFingerprint): Promise<number> {
+  async checkForDangerPatterns(_fingerprint: TradeFingerprint): Promise<number> {
     try {
       const result = await db.query<any>(`
         SELECT confidence_score, occurrences

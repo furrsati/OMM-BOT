@@ -98,7 +98,7 @@ export class ConvictionScorer {
       const entryQualityContribution = entryQualityScore * weights.entryQuality;
 
       // Calculate base score (sum of weighted contributions)
-      let baseScore =
+      const baseScore =
         smartWalletContribution +
         safetyContribution +
         marketContribution +

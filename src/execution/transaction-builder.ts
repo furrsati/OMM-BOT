@@ -8,7 +8,7 @@
  * - Compute budget instructions for complex swaps
  */
 
-import { Connection, PublicKey, Keypair, VersionedTransaction, TransactionMessage } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, VersionedTransaction } from '@solana/web3.js';
 import { logger } from '../utils/logger';
 import { JupiterClient, SwapQuote } from './jupiter-client';
 
@@ -267,7 +267,7 @@ export class TransactionBuilder {
   /**
    * Validate transaction before sending
    */
-  async validateTransaction(tx: BuiltTransaction, userPublicKey: PublicKey): Promise<boolean> {
+  async validateTransaction(tx: BuiltTransaction, _userPublicKey: PublicKey): Promise<boolean> {
     try {
       // Check 1: Verify transaction is signed
       if (!tx.transaction.signatures || tx.transaction.signatures.length === 0) {

@@ -10,7 +10,6 @@
 
 import { Connection, PublicKey, ParsedTransactionWithMeta } from '@solana/web3.js';
 import { logger } from '../utils/logger';
-import { getRedisClient } from '../db/redis';
 
 interface TokenPerformance {
   address: string;
@@ -36,12 +35,10 @@ interface WalletConnectionGraph {
 
 export class WalletScanner {
   private connection: Connection;
-  private redis: ReturnType<typeof getRedisClient>;
   private scanningActive: boolean = false;
 
   constructor(connection: Connection) {
     this.connection = connection;
-    this.redis = getRedisClient();
   }
 
   /**
@@ -143,10 +140,11 @@ export class WalletScanner {
     // WHERE (peak_price / launch_price) BETWEEN 5 AND 50
     // AND launch_time > NOW() - INTERVAL '7 days'
 
-    const cached = await this.redis.get('winning_tokens_cache');
-    if (cached) {
-      return JSON.parse(cached);
-    }
+    // REDIS REMOVED - caching disabled
+    // const cached = await this.redis.get('winning_tokens_cache');
+    // if (cached) {
+    //   return JSON.parse(cached);
+    // }
 
     // For now, return empty (Phase 2 will connect to price feeds)
     return [];
@@ -164,7 +162,7 @@ export class WalletScanner {
 
       // Get signatures for token account from launch to 5 minutes after
       const launchTime = token.launchTime;
-      const fiveMinutesAfter = launchTime + (5 * 60);
+      // const fiveMinutesAfter = launchTime + (5 * 60); // TODO: Use this for time filtering
 
       // Fetch transaction signatures
       const signatures = await this.connection.getSignaturesForAddress(
@@ -456,7 +454,7 @@ export class WalletScanner {
 
       if (signatures.length < 10) return false; // Not enough data
 
-      let quickSellCount = 0;
+      const quickSellCount = 0;
       let totalTrades = 0;
 
       // Analyze transaction patterns
@@ -495,29 +493,30 @@ export class WalletScanner {
    */
   private async cacheAlphaWallets(buyers: EarlyBuyer[]): Promise<void> {
     try {
-      for (const buyer of buyers) {
-        const key = `alpha_wallet:${buyer.walletAddress}`;
+      // REDIS REMOVED - caching disabled
+      // for (const buyer of buyers) {
+      //   const key = `alpha_wallet:${buyer.walletAddress}`;
 
-        // Get existing data
-        const existing = await this.redis.get(key);
-        const data = existing ? JSON.parse(existing) : {
-          address: buyer.walletAddress,
-          tokens: [],
-          lastUpdated: Date.now()
-        };
+      //   // Get existing data
+      //   const existing = await this.redis.get(key);
+      //   const data = existing ? JSON.parse(existing) : {
+      //     address: buyer.walletAddress,
+      //     tokens: [],
+      //     lastUpdated: Date.now()
+      //   };
 
-        // Add this token to their history
-        if (!data.tokens.includes(buyer.tokenAddress)) {
-          data.tokens.push(buyer.tokenAddress);
-        }
+      //   // Add this token to their history
+      //   if (!data.tokens.includes(buyer.tokenAddress)) {
+      //     data.tokens.push(buyer.tokenAddress);
+      //   }
 
-        data.lastUpdated = Date.now();
+      //   data.lastUpdated = Date.now();
 
-        // Cache for 30 days
-        await this.redis.setEx(key, 30 * 24 * 60 * 60, JSON.stringify(data));
-      }
+      //   // Cache for 30 days
+      //   await this.redis.setEx(key, 30 * 24 * 60 * 60, JSON.stringify(data));
+      // }
 
-      logger.debug(`Cached ${buyers.length} alpha wallets`);
+      logger.debug(`Would cache ${buyers.length} alpha wallets (Redis disabled)`);
 
     } catch (error: any) {
       logger.error('Error caching alpha wallets', { error: error.message });
