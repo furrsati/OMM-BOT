@@ -43,6 +43,12 @@ export class RegimeDetector {
   private updateIntervalMs: number = 60000; // 1 minute
   private manualOverride: MarketRegime | null = null;
 
+  // In-memory cache for price data
+  private priceCache: Map<string, AssetPrice> = new Map();
+  private priceCacheTTL: number = 120000; // 2 minutes
+  private lastRateLimitHit: number = 0;
+  private rateLimitBackoffMs: number = 300000; // 5 minute backoff on rate limit
+
   constructor() {
     this.currentRegime = {
       regime: 'FULL',
@@ -195,10 +201,11 @@ export class RegimeDetector {
    */
   private async updateRegime(): Promise<void> {
     try {
-      // Fetch price data
-      const sol = await this.fetchAssetPrice('SOL');
-      const btc = await this.fetchAssetPrice('BTC');
-      const eth = await this.fetchAssetPrice('ETH');
+      // Fetch all prices in a single batched request
+      const prices = await this.fetchAllPrices();
+      const sol = prices.get('SOL');
+      const btc = prices.get('BTC');
+      const eth = prices.get('ETH');
 
       if (!sol || !btc) {
         logger.warn('Could not fetch SOL/BTC prices, keeping current regime');
@@ -299,41 +306,60 @@ export class RegimeDetector {
   }
 
   /**
-   * Fetch asset price from CoinGecko
+   * Fetch all asset prices in a single batched request with in-memory caching
    */
-  private async fetchAssetPrice(symbol: string): Promise<AssetPrice | null> {
+  private async fetchAllPrices(): Promise<Map<string, AssetPrice>> {
+    const symbols = ['SOL', 'BTC', 'ETH'];
+    const result = new Map<string, AssetPrice>();
+    const now = Date.now();
+
+    // Check if we're in rate limit backoff period
+    if (this.lastRateLimitHit > 0 && now - this.lastRateLimitHit < this.rateLimitBackoffMs) {
+      // Return cached data during backoff
+      for (const symbol of symbols) {
+        const cached = this.priceCache.get(symbol);
+        if (cached) {
+          result.set(symbol, cached);
+        }
+      }
+      if (result.size > 0) {
+        logger.debug('Using cached prices during rate limit backoff');
+        return result;
+      }
+    }
+
+    // Check if all prices are in cache and still valid
+    let allCached = true;
+    for (const symbol of symbols) {
+      const cached = this.priceCache.get(symbol);
+      if (!cached || now - cached.timestamp > this.priceCacheTTL) {
+        allCached = false;
+        break;
+      }
+    }
+
+    if (allCached) {
+      for (const symbol of symbols) {
+        result.set(symbol, this.priceCache.get(symbol)!);
+      }
+      return result;
+    }
+
+    // Fetch all prices in a single request
     try {
-      // Map symbols to CoinGecko IDs
       const idMap: Record<string, string> = {
         SOL: 'solana',
         BTC: 'bitcoin',
         ETH: 'ethereum'
       };
 
-      const coinId = idMap[symbol];
-      if (!coinId) {
-        logger.warn(`Unknown symbol: ${symbol}`);
-        return null;
-      }
+      const coinIds = symbols.map(s => idMap[s]).join(',');
 
-      // REDIS REMOVED - caching disabled
-      // Try cache first
-      // const cacheKey = `asset_price:${symbol}`;
-      // const cached = await this.redis.get(cacheKey);
-      // if (cached) {
-      //   const data = JSON.parse(cached);
-      //   // If cache is less than 1 minute old, use it
-      //   if (Date.now() - data.timestamp < 60000) {
-      //     return data;
-      //   }
-      // }
-
-      // Fetch from CoinGecko
       const response = await axios.get(
         `https://api.coingecko.com/api/v3/simple/price`,
         {
           params: {
-            ids: coinId,
+            ids: coinIds,
             vs_currencies: 'usd',
             include_24hr_change: true,
             include_7d_change: true
@@ -342,34 +368,46 @@ export class RegimeDetector {
         }
       );
 
-      const data = response.data[coinId];
-      if (!data) {
-        logger.warn(`No price data for ${symbol}`);
-        return null;
+      // Process response and update cache
+      for (const symbol of symbols) {
+        const coinId = idMap[symbol];
+        const data = response.data[coinId];
+
+        if (data) {
+          const assetPrice: AssetPrice = {
+            symbol,
+            priceUSD: data.usd,
+            change24h: data.usd_24h_change || 0,
+            change7d: data.usd_7d_change || 0,
+            timestamp: now
+          };
+          this.priceCache.set(symbol, assetPrice);
+          result.set(symbol, assetPrice);
+        }
       }
 
-      const assetPrice: AssetPrice = {
-        symbol,
-        priceUSD: data.usd,
-        change24h: data.usd_24h_change || 0,
-        change7d: data.usd_7d_change || 0,
-        timestamp: Date.now()
-      };
+      // Clear rate limit flag on successful request
+      this.lastRateLimitHit = 0;
 
-      // REDIS REMOVED - caching disabled
-      // Cache for 1 minute
-      // await this.redis.setEx(cacheKey, 60, JSON.stringify(assetPrice));
-
-      return assetPrice;
+      return result;
 
     } catch (error: any) {
       // Check if it's a rate limit error
       if (error.response?.status === 429) {
-        logger.warn('CoinGecko rate limit hit, using cache');
+        logger.warn('CoinGecko rate limit hit, backing off for 5 minutes');
+        this.lastRateLimitHit = now;
       } else {
-        logger.debug(`Error fetching ${symbol} price`, { error: error.message });
+        logger.debug('Error fetching prices from CoinGecko', { error: error.message });
       }
-      return null;
+
+      // Return cached data on error
+      for (const symbol of symbols) {
+        const cached = this.priceCache.get(symbol);
+        if (cached) {
+          result.set(symbol, cached);
+        }
+      }
+      return result;
     }
   }
 
