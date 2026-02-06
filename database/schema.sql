@@ -8,19 +8,28 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- =====================================================
 CREATE TABLE smart_wallets (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  wallet_address VARCHAR(44) NOT NULL UNIQUE,
+  address VARCHAR(44) NOT NULL UNIQUE,
   tier INT NOT NULL CHECK (tier IN (1, 2, 3)),
   score DECIMAL(10, 2) NOT NULL DEFAULT 0,
   win_rate DECIMAL(5, 2) DEFAULT 0,
   average_return DECIMAL(10, 2) DEFAULT 0,
   tokens_entered INT DEFAULT 0,
+  tokens_won INT DEFAULT 0,
   last_active TIMESTAMP DEFAULT NOW(),
-  metrics JSONB NOT NULL DEFAULT '{}',
+  total_trades INT DEFAULT 0,
+  successful_trades INT DEFAULT 0,
+  average_hold_time INT DEFAULT 0,
+  avg_peak_multiplier DECIMAL(10, 2) DEFAULT 0,
+  best_pick_multiplier DECIMAL(10, 2) DEFAULT 0,
+  recent_tokens JSONB DEFAULT '[]',
   is_active BOOLEAN DEFAULT TRUE,
+  is_crowded BOOLEAN DEFAULT FALSE,
+  notes TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE INDEX idx_smart_wallets_address ON smart_wallets(address);
 CREATE INDEX idx_smart_wallets_tier ON smart_wallets(tier);
 CREATE INDEX idx_smart_wallets_score ON smart_wallets(score DESC);
 CREATE INDEX idx_smart_wallets_last_active ON smart_wallets(last_active DESC);

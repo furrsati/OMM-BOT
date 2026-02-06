@@ -402,10 +402,10 @@ export class OnChainSocialIntelligence {
       const walletResult = await query<{
         win_rate: string;
         average_return: string;
-        metrics: { totalTrades?: number };
+        total_trades: number;
       }>(
-        `SELECT win_rate, average_return, metrics
-         FROM smart_wallets WHERE wallet_address = $1`,
+        `SELECT win_rate, average_return, total_trades
+         FROM smart_wallets WHERE address = $1`,
         [walletAddress]
       );
 
@@ -414,7 +414,7 @@ export class OnChainSocialIntelligence {
         return {
           winRate: parseFloat(w.win_rate) || 0,
           avgReturn: parseFloat(w.average_return) || 0,
-          totalTrades: w.metrics?.totalTrades || 0
+          totalTrades: w.total_trades || 0
         };
       }
 

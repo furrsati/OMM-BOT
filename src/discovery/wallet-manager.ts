@@ -137,7 +137,7 @@ export class WalletManager {
     try {
       // Find wallets that meet removal criteria
       const poorPerformers = await query<{ address: string; reason: string }>(
-        `SELECT wallet_address as address,
+        `SELECT address,
           CASE
             WHEN tokens_entered >= 5 AND win_rate < 0.10 THEN 'Win rate below 10%'
             WHEN tokens_entered >= 10 AND tokens_won = 0 THEN 'No wins after 10+ tokens'
@@ -165,7 +165,7 @@ export class WalletManager {
       for (const wallet of poorPerformers.rows) {
         // Mark as inactive (soft delete)
         await query(
-          `UPDATE smart_wallets SET is_active = false, notes = $2, updated_at = NOW() WHERE wallet_address = $1`,
+          `UPDATE smart_wallets SET is_active = false, notes = $2, updated_at = NOW() WHERE address = $1`,
           [wallet.address, `Removed: ${wallet.reason}`]
         );
 
@@ -190,13 +190,13 @@ export class WalletManager {
     try {
       // Find wallets where recent 7-day win rate is much lower than overall
       const declining = await query<{ address: string; current_tier: number }>(
-        `SELECT sw.wallet_address as address, sw.tier as current_tier
+        `SELECT sw.address, sw.tier as current_tier
          FROM smart_wallets sw
          WHERE sw.is_active = true
          AND sw.tier < 3
          AND EXISTS (
            SELECT 1 FROM wallet_discoveries wd
-           WHERE wd.wallet_address = sw.wallet_address
+           WHERE wd.wallet_address = sw.address
            AND wd.entry_time > NOW() - INTERVAL '7 days'
            GROUP BY wd.wallet_address
            HAVING COUNT(*) FILTER (WHERE is_winner) * 1.0 / NULLIF(COUNT(*), 0) < sw.win_rate - 0.2
@@ -212,7 +212,7 @@ export class WalletManager {
         const newTier = Math.min(3, wallet.current_tier + 1) as 1 | 2 | 3;
         await query(
           `UPDATE smart_wallets SET tier = $2, notes = 'Demoted: Performance declining', updated_at = NOW()
-           WHERE wallet_address = $1`,
+           WHERE address = $1`,
           [wallet.address, newTier]
         );
 
@@ -254,8 +254,8 @@ export class WalletManager {
       await query(
         `UPDATE smart_wallets
          SET is_active = false, notes = 'Pruned: Outside top 100', updated_at = NOW()
-         WHERE wallet_address IN (
-           SELECT wallet_address FROM smart_wallets
+         WHERE address IN (
+           SELECT address FROM smart_wallets
            WHERE is_active = true
            ORDER BY score DESC
            OFFSET 100
@@ -351,8 +351,8 @@ export class WalletManager {
   private async loadWatchlist(): Promise<void> {
     try {
       const result = await query(`
-        SELECT wallet_address as address, tier, score, win_rate, average_return,
-               tokens_entered, last_active, metrics
+        SELECT address, tier, score, win_rate, average_return,
+               tokens_entered, last_active, total_trades, successful_trades, average_hold_time
         FROM smart_wallets
         WHERE last_active > NOW() - INTERVAL '7 days'
         AND is_active = true
@@ -361,7 +361,6 @@ export class WalletManager {
       `);
 
       for (const row of result.rows) {
-        const metricsData = row.metrics || {};
         const wallet: SmartWallet = {
           address: row.address,
           tier: row.tier,
@@ -371,9 +370,9 @@ export class WalletManager {
           tokensEntered: row.tokens_entered,
           lastActive: new Date(row.last_active),
           metrics: {
-            totalTrades: metricsData.totalTrades || 0,
-            successfulTrades: metricsData.successfulTrades || 0,
-            averageHoldTime: metricsData.averageHoldTime || 0
+            totalTrades: row.total_trades || 0,
+            successfulTrades: row.successful_trades || 0,
+            averageHoldTime: row.average_hold_time || 0
           }
         };
 
