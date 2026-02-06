@@ -359,10 +359,10 @@ export class OnChainSocialIntelligence {
       const tokenPubkey = new PublicKey(tokenAddress);
       const cutoffTime = Math.floor(Date.now() / 1000) - (minutes * 60);
 
-      // Get recent signatures for the token
+      // Get recent signatures for the token (reduced from 100 to 50 for memory)
       const signatures = await this.connection.getSignaturesForAddress(
         tokenPubkey,
-        { limit: 100 },
+        { limit: 50 },
         'confirmed'
       );
 
@@ -371,21 +371,27 @@ export class OnChainSocialIntelligence {
 
       for (const sig of recentSigs.slice(0, 30)) { // Limit to avoid rate limits
         try {
-          const tx = await this.connection.getParsedTransaction(
+          let tx: any = await this.connection.getParsedTransaction(
             sig.signature,
             { maxSupportedTransactionVersion: 0 }
           );
 
-          if (!tx || !tx.meta) continue;
+          if (!tx || !tx.meta) {
+            tx = null; // Release memory
+            continue;
+          }
 
-          // Look for token balance increases (buys)
+          // Look for token balance increases (buys) - extract before releasing
           const postBalances = tx.meta.postTokenBalances || [];
           const preBalances = tx.meta.preTokenBalances || [];
+
+          // Release tx early (500KB-2MB each)
+          tx = null;
 
           for (const post of postBalances) {
             if (post.mint !== tokenAddress) continue;
 
-            const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
+            const pre = preBalances.find((p: any) => p.accountIndex === post.accountIndex);
             const preAmount = parseInt(pre?.uiTokenAmount?.amount || '0');
             const postAmount = parseInt(post.uiTokenAmount?.amount || '0');
 

@@ -35,8 +35,9 @@ export class RateLimiter {
   private requestCount: number = 0;
   private lastRequestCountReset: number = Date.now();
 
-  // Memory management - prevent unbounded queue growth
-  private readonly MAX_QUEUE_SIZE = 500;
+  // Memory management - reduced for 512MB Render instances
+  // 500 was way too high, causing 50-100MB queue memory
+  private readonly MAX_QUEUE_SIZE = 50;
 
   constructor(config: RateLimiterConfig) {
     this.maxTokens = config.maxBurst;

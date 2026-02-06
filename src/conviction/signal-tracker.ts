@@ -312,7 +312,7 @@ export class SignalTracker {
 
       for (const sig of recentSigs.slice(0, 10)) {
         try {
-          const tx = await rateLimitedRPC(
+          let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
               sig.signature,
               { maxSupportedTransactionVersion: 0 }
@@ -320,17 +320,23 @@ export class SignalTracker {
             0 // Lower priority
           );
 
-          if (!tx || !tx.meta || tx.meta.err) continue;
+          if (!tx || !tx.meta || tx.meta.err) {
+            tx = null; // Release memory
+            continue;
+          }
 
-          // Check for token balance increases (purchases)
+          // Check for token balance increases (purchases) - extract before releasing
           const preBalances = tx.meta.preTokenBalances || [];
           const postBalances = tx.meta.postTokenBalances || [];
+
+          // Release tx early (500KB-2MB each)
+          tx = null;
 
           for (const post of postBalances) {
             if (!post.mint || !post.owner) continue;
             if (post.owner !== walletAddress) continue;
 
-            const pre = preBalances.find(p =>
+            const pre = preBalances.find((p: any) =>
               p.accountIndex === post.accountIndex
             );
 

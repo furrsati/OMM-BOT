@@ -731,7 +731,7 @@ export class DangerMonitor {
         }
 
         try {
-          const tx = await rateLimitedRPC(
+          let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(sig.signature, {
               maxSupportedTransactionVersion: 0
             }),
@@ -739,14 +739,20 @@ export class DangerMonitor {
           );
 
           if (!tx?.meta?.postTokenBalances || !tx?.meta?.preTokenBalances) {
+            tx = null; // Release memory
             continue;
           }
 
+          // Extract data before releasing tx
+          const postTokenBalances = tx.meta.postTokenBalances;
+          const preTokenBalances = tx.meta.preTokenBalances;
+          tx = null; // Release memory (500KB-2MB each)
+
           // Find large token transfers (sells)
-          for (let i = 0; i < tx.meta.postTokenBalances.length; i++) {
-            const post = tx.meta.postTokenBalances[i];
-            const pre = tx.meta.preTokenBalances.find(
-              p => p.accountIndex === post.accountIndex
+          for (let i = 0; i < postTokenBalances.length; i++) {
+            const post = postTokenBalances[i];
+            const pre = preTokenBalances.find(
+              (p: any) => p.accountIndex === post.accountIndex
             );
 
             if (!pre || post.mint !== position.tokenAddress) {
@@ -822,7 +828,7 @@ export class DangerMonitor {
       // Analyze recent transactions
       for (const sig of recentSigs.slice(0, 15)) {
         try {
-          const tx = await rateLimitedRPC(
+          let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(sig.signature, {
               maxSupportedTransactionVersion: 0
             }),
@@ -830,14 +836,20 @@ export class DangerMonitor {
           );
 
           if (!tx?.meta?.postTokenBalances || !tx?.meta?.preTokenBalances) {
+            tx = null; // Release memory
             continue;
           }
 
+          // Extract data before releasing tx
+          const postTokenBalances = tx.meta.postTokenBalances;
+          const preTokenBalances = tx.meta.preTokenBalances;
+          tx = null; // Release memory (500KB-2MB each)
+
           // Look at token balance changes to determine buy vs sell
-          for (let i = 0; i < tx.meta.postTokenBalances.length; i++) {
-            const post = tx.meta.postTokenBalances[i];
-            const pre = tx.meta.preTokenBalances.find(
-              p => p.accountIndex === post.accountIndex
+          for (let i = 0; i < postTokenBalances.length; i++) {
+            const post = postTokenBalances[i];
+            const pre = preTokenBalances.find(
+              (p: any) => p.accountIndex === post.accountIndex
             );
 
             if (!pre || post.mint !== position.tokenAddress) {

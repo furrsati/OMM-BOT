@@ -176,7 +176,15 @@ async function main() {
       const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
       const rssMB = Math.round(usage.rss / 1024 / 1024);
 
-      // CRITICAL: 512MB Render plan - trigger at 400MB
+      // NEW: Proactive GC at 300MB to prevent hitting 400MB
+      if (rssMB > 300 && rssMB <= 400) {
+        logger.info('⚠️ Memory elevated, triggering proactive GC', { heapUsedMB, rssMB });
+        if (global.gc) {
+          global.gc();
+        }
+      }
+
+      // CRITICAL: 512MB Render plan - emergency at 400MB
       if (rssMB > 400) {
         logger.warn('🚨 CRITICAL MEMORY - forcing cleanup', {
           heapUsedMB,
@@ -195,8 +203,6 @@ async function main() {
           logger.error('🚨 EMERGENCY MEMORY CLEANUP - clearing caches');
           // The individual components will re-populate from DB as needed
         }
-      } else if (rssMB > 300) {
-        logger.info('⚠️ Memory usage elevated', { heapUsedMB, rssMB });
       }
     }, 30 * 1000); // Check every 30 seconds
 

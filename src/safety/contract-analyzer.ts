@@ -713,10 +713,10 @@ export class ContractAnalyzer {
    */
   private async detectHiddenMint(tokenAddress: string): Promise<boolean> {
     try {
-      // Get recent transaction history for analysis
+      // Get recent transaction history for analysis (reduced from 100 to 30 for memory)
       const tokenPubkey = new PublicKey(tokenAddress);
       await rateLimitedRPC(
-        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 100 }),
+        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 30 }),
         2
       );
 

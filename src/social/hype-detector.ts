@@ -228,7 +228,7 @@ export class HypeDetector {
 
       // Get transactions from the last 5 minutes
       const signatures = await rateLimitedRPC(
-        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 100 }, 'confirmed'),
+        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 50 }, 'confirmed'),
         2
       );
 
@@ -278,7 +278,7 @@ export class HypeDetector {
       const fifteenMinutesAgo = Date.now() / 1000 - 900;
 
       const signatures = await rateLimitedRPC(
-        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 100 }, 'confirmed'),
+        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 50 }, 'confirmed'),
         2
       );
 
@@ -287,20 +287,27 @@ export class HypeDetector {
 
       for (const sig of recentSigs.slice(0, 30)) {
         try {
-          const tx = await rateLimitedRPC(
+          let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 }),
             1 // lowest priority
           );
 
-          if (!tx || !tx.meta) continue;
+          if (!tx || !tx.meta) {
+            tx = null; // Release memory
+            continue;
+          }
 
+          // Extract before releasing tx
           const postBalances = tx.meta.postTokenBalances || [];
           const preBalances = tx.meta.preTokenBalances || [];
+
+          // Release tx early (500KB-2MB each)
+          tx = null;
 
           for (const post of postBalances) {
             if (post.mint !== tokenAddress) continue;
 
-            const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
+            const pre = preBalances.find((p: any) => p.accountIndex === post.accountIndex);
             const preAmount = parseInt(pre?.uiTokenAmount?.amount || '0');
             const postAmount = parseInt(post.uiTokenAmount?.amount || '0');
 

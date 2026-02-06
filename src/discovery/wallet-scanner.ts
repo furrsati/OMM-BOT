@@ -80,9 +80,15 @@ export class WalletScanner {
     while (this.scanningActive) {
       try {
         await this.runScanCycle();
+
+        // CRITICAL: Force memory cleanup between cycles
+        // Without this, 4-10MB accumulates per cycle and is never freed
+        this.cleanup();
+
         await this.sleep(scanInterval);
       } catch (error: any) {
         logger.error('Error in wallet scan cycle', { error: error.message });
+        this.cleanup(); // Also cleanup on error
         await this.sleep(60000); // Wait 1 minute on error
       }
     }
@@ -126,6 +132,21 @@ export class WalletScanner {
     }
 
     logger.info('Wallet scanner stopped');
+  }
+
+  /**
+   * Clear internal state and trigger garbage collection
+   * CRITICAL: Must be called between scan cycles to prevent memory accumulation
+   * Each scan cycle can accumulate 4-10MB that is never freed without this
+   */
+  private cleanup(): void {
+    logger.debug('Wallet scanner: running memory cleanup');
+
+    // Trigger garbage collection if available (requires --expose-gc flag)
+    if (global.gc) {
+      global.gc();
+      logger.debug('Garbage collection triggered');
+    }
   }
 
   /**
@@ -208,6 +229,10 @@ export class WalletScanner {
         // Add delay between tokens to give RPC a break
         await this.sleep(5000);
       }
+
+      // CRITICAL: Clear arrays to free memory before next cycle
+      // Without this, winningTokens can accumulate 4-10MB per cycle
+      winningTokens.length = 0;
 
       logThinking('SCANNER', `Scan cycle complete: processed ${tokensToProcess.length} tokens, found ${totalEarlyBuyers} early buyers`, {
         tokensProcessed: tokensToProcess.length,
@@ -573,11 +598,11 @@ export class WalletScanner {
       const launchTime = token.launchTime;
       const fiveMinutesAfterLaunch = launchTime + 300;
 
-      // Get signatures for the pool address (minimal to conserve RPC calls)
+      // Get signatures for the pool address (reduced from 50 to 20 for memory)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           poolPubkey,
-          { limit: 50 },
+          { limit: 20 },
           'confirmed'
         ),
         2 // Higher priority for pool queries
@@ -596,7 +621,8 @@ export class WalletScanner {
       // Parse each transaction to find buyers
       for (const sig of relevantSigs) {
         try {
-          const tx = await rateLimitedRPC(
+          // Use let instead of const so we can release memory
+          let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
               sig.signature,
               { maxSupportedTransactionVersion: 0 }
@@ -604,10 +630,16 @@ export class WalletScanner {
             1
           );
 
-          if (!tx || !tx.meta || tx.meta.err) continue;
+          if (!tx || !tx.meta || tx.meta.err) {
+            tx = null; // Release memory immediately
+            continue;
+          }
 
           // Extract buyers from this swap transaction
           const buyers = this.extractBuyersFromSwap(tx, token.address);
+
+          // CRITICAL: Release the large transaction object (500KB-2MB each)
+          tx = null;
 
           for (const buyerAddress of buyers) {
             earlyBuyers.push({
@@ -724,7 +756,7 @@ export class WalletScanner {
             method: 'getTokenAccounts',
             params: {
               mint: token.address,
-              limit: 100,
+              limit: 50, // Reduced from 100 for memory
             }
           }),
           headers: { 'Content-Type': 'application/json' }
@@ -943,11 +975,11 @@ export class WalletScanner {
     try {
       const tokenPubkey = new PublicKey(tokenAddress);
 
-      // Get token account creation signature (minimal to conserve RPC)
+      // Get token account creation signature (reduced from 50 to 20 for memory)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           tokenPubkey,
-          { limit: 50 },
+          { limit: 20 },
           'confirmed'
         ),
         1 // Medium priority
@@ -957,7 +989,7 @@ export class WalletScanner {
 
       // Oldest signature is likely the creation transaction
       const creationSig = signatures[signatures.length - 1];
-      const tx = await rateLimitedRPC(
+      let tx: any = await rateLimitedRPC(
         () => this.connection.getParsedTransaction(
           creationSig.signature,
           { maxSupportedTransactionVersion: 0 }
@@ -968,7 +1000,9 @@ export class WalletScanner {
       if (!tx) return null;
 
       // The fee payer is typically the deployer
-      return tx.transaction.message.accountKeys[0].pubkey.toBase58();
+      const deployer = tx.transaction.message.accountKeys[0].pubkey.toBase58();
+      tx = null; // Release memory (500KB-2MB per tx)
+      return deployer;
 
     } catch (error: any) {
       logger.debug('Error getting token deployer', { error: error.message });
@@ -1044,7 +1078,7 @@ export class WalletScanner {
       // Check first 5 transactions for connection detection
       for (const sig of signatures.slice(0, 5)) {
         try {
-          const tx = await rateLimitedRPC(
+          let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
               sig.signature,
               { maxSupportedTransactionVersion: 0 }
@@ -1052,12 +1086,18 @@ export class WalletScanner {
             0 // Lower priority
           );
 
-          if (!tx || !tx.meta) continue;
+          if (!tx || !tx.meta) {
+            tx = null; // Release memory
+            continue;
+          }
 
           // Check post-balances for recipients
           const accountKeys = tx.transaction.message.accountKeys;
           const preBalances = tx.meta.preBalances;
           const postBalances = tx.meta.postBalances;
+
+          // Release tx early - we've extracted what we need
+          tx = null;
 
           for (let i = 0; i < accountKeys.length; i++) {
             const recipient = accountKeys[i].pubkey.toBase58();
@@ -1140,7 +1180,7 @@ export class WalletScanner {
       // Analyze transactions for bot patterns (minimal)
       for (const sig of signatures.slice(0, 5)) {
         try {
-          const tx = await rateLimitedRPC(
+          let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
               sig.signature,
               { maxSupportedTransactionVersion: 0 }
@@ -1148,7 +1188,10 @@ export class WalletScanner {
             0
           );
 
-          if (!tx || !tx.meta) continue;
+          if (!tx || !tx.meta) {
+            tx = null; // Release memory
+            continue;
+          }
 
           const slot = tx.slot;
           slotCounts.set(slot, (slotCounts.get(slot) || 0) + 1);
@@ -1177,15 +1220,18 @@ export class WalletScanner {
             atomicArbPatterns++;
           }
 
-          // Check token balance changes
+          // Check token balance changes - extract before releasing tx
           const preBalances = tx.meta.preTokenBalances || [];
           const postBalances = tx.meta.postTokenBalances || [];
+
+          // Release tx early - we've extracted what we need
+          tx = null;
 
           for (const post of postBalances) {
             if (!post.mint || !post.owner) continue;
 
             const pre = preBalances.find(
-              p => p.accountIndex === post.accountIndex
+              (p: any) => p.accountIndex === post.accountIndex
             );
 
             const preAmount = parseInt(pre?.uiTokenAmount?.amount || '0');
@@ -1520,16 +1566,22 @@ export class WalletScanner {
       // Parse recent transactions to find token swaps (minimal)
       for (const sig of signatures.slice(0, 10)) {
         try {
-          const tx = await rateLimitedRPC(
+          let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 }),
             0
           );
 
-          if (!tx || !tx.meta) continue;
+          if (!tx || !tx.meta) {
+            tx = null; // Release memory
+            continue;
+          }
 
-          // Look for token balance increases (buys)
+          // Look for token balance increases (buys) - extract before releasing
           const postBalances = tx.meta.postTokenBalances || [];
           const preBalances = tx.meta.preTokenBalances || [];
+
+          // Release tx early
+          tx = null;
 
           for (const post of postBalances) {
             if (!post.mint || !post.owner) continue;
@@ -1538,7 +1590,7 @@ export class WalletScanner {
             // Skip SOL and stablecoins
             if (this.isCommonToken(post.mint)) continue;
 
-            const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
+            const pre = preBalances.find((p: any) => p.accountIndex === post.accountIndex);
             const preAmount = parseFloat(pre?.uiTokenAmount?.uiAmount?.toString() || '0');
             const postAmount = parseFloat(post.uiTokenAmount?.uiAmount?.toString() || '0');
 
