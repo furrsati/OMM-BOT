@@ -182,7 +182,7 @@ router.post(
         tokenAddress,
         checks,
         score: totalScore,
-        maxScore: 90,
+        maxScore: 100,
         passed,
       },
     });

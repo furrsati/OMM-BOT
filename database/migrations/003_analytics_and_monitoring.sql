@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS daily_analytics (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_daily_analytics_date ON daily_analytics(date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_analytics_date ON daily_analytics(date DESC);
 
 -- System health tracking
 CREATE TABLE IF NOT EXISTS system_health_logs (

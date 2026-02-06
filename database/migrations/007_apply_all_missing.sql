@@ -379,11 +379,16 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_path ON audit_log(path);
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'smart_wallets_address_key'
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_namespace n ON n.oid = c.connamespace
+    WHERE c.conname = 'smart_wallets_address_key'
+    AND n.nspname = current_schema()
   ) THEN
     ALTER TABLE smart_wallets ADD CONSTRAINT smart_wallets_address_key UNIQUE (address);
   END IF;
+EXCEPTION
+  WHEN duplicate_object THEN
+    NULL;
 END $$;
 
 -- Add missing columns

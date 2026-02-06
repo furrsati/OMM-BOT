@@ -279,27 +279,27 @@ export default function ScannerPage() {
                       <TableCell className="text-right">
                         <Badge
                           variant={
-                            opportunity.safety?.score || 0 >= 80
+                            (opportunity.safety?.score ?? 0) >= 85
                               ? 'success'
-                              : opportunity.safety?.score || 0 >= 60
+                              : (opportunity.safety?.score ?? 0) >= 70
                               ? 'warning'
                               : 'destructive'
                           }
                         >
-                          {formatNumber(opportunity.safety?.score || 0, 0)}
+                          {formatNumber(opportunity.safety?.score ?? 0, 0)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
                         <Badge
                           variant={
-                            opportunity.conviction?.score || 0 >= 85
+                            (opportunity.conviction?.score ?? 0) >= 85
                               ? 'success'
-                              : opportunity.conviction?.score || 0 >= 70
+                              : (opportunity.conviction?.score ?? 0) >= 70
                               ? 'warning'
                               : 'outline'
                           }
                         >
-                          {formatNumber(opportunity.conviction?.score || 0, 0)}
+                          {formatNumber(opportunity.conviction?.score ?? 0, 0)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono">
