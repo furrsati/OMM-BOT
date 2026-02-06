@@ -278,7 +278,7 @@ export class PriceFeed {
    * Fetch price from Raydium
    * STUB: Full implementation requires Raydium SDK integration
    */
-  private async fetchFromRaydium(tokenAddress: string): Promise<TokenPrice | null> {
+  private async fetchFromRaydium(_tokenAddress: string): Promise<TokenPrice | null> {
     try {
       // STUB: In production, use Raydium SDK to query pool state
       // Example:
@@ -299,7 +299,7 @@ export class PriceFeed {
    * Fetch price from on-chain pool state
    * STUB: Requires pool parsing logic
    */
-  private async fetchOnChain(tokenAddress: string): Promise<TokenPrice | null> {
+  private async fetchOnChain(_tokenAddress: string): Promise<TokenPrice | null> {
     try {
       // STUB: Parse pool account data directly
       // This is the most reliable but slowest method
@@ -316,7 +316,7 @@ export class PriceFeed {
   /**
    * Save price to history
    */
-  private async savePriceToHistory(price: TokenPrice): Promise<void> {
+  private async savePriceToHistory(_price: TokenPrice): Promise<void> {
     try {
       // REDIS REMOVED - caching disabled
       // const key = `price_history:${price.tokenAddress}`;

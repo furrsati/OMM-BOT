@@ -11,8 +11,9 @@
  * CRITICAL: This uses Solana transaction simulation - NO REAL FUNDS are used
  */
 
-import { Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
 import { logger } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
 
 export interface HoneypotAnalysis {
   tokenAddress: string;
@@ -97,10 +98,11 @@ export class HoneypotDetector {
 
       return analysis;
 
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
       logger.error('Error detecting honeypot', {
         token: tokenAddress,
-        error: error.message
+        error: errorMsg
       });
 
       // Return safe defaults on error (assume unsafe)
@@ -113,7 +115,7 @@ export class HoneypotDetector {
         sellTaxPercent: 100,
         hasHiddenTaxes: true,
         hasTransferRestrictions: true,
-        simulationError: error.message,
+        simulationError: errorMsg,
         score: 0,
         timestamp: Date.now()
       };
@@ -145,12 +147,13 @@ export class HoneypotDetector {
         error: null
       };
 
-    } catch (error: any) {
-      logger.debug('Buy simulation failed', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Buy simulation failed', { error: errorMsg });
       return {
         success: false,
         taxPercent: 100,
-        error: error.message
+        error: errorMsg
       };
     }
   }
@@ -180,12 +183,13 @@ export class HoneypotDetector {
         error: null
       };
 
-    } catch (error: any) {
-      logger.debug('Sell simulation failed', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Sell simulation failed', { error: errorMsg });
       return {
         success: false,
         taxPercent: 100,
-        error: error.message
+        error: errorMsg
       };
     }
   }
@@ -234,8 +238,9 @@ export class HoneypotDetector {
       const sellResult = await this.simulateSell(tokenAddress);
       return sellResult.success;
 
-    } catch (error: any) {
-      logger.debug('Quick honeypot check failed', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Quick honeypot check failed', { error: errorMsg });
       return false;
     }
   }

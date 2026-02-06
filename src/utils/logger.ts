@@ -134,7 +134,8 @@ class PostgresTransport extends Transport {
     }
 
     // Extract data from info (excluding winston metadata)
-    const { level, message: _, timestamp, ...data } = info;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { level: _level, message: _msg, timestamp: _ts, ...data } = info;
 
     const logEntry = {
       level: info.level,

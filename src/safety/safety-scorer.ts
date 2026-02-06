@@ -24,6 +24,7 @@
 
 import { Connection } from '@solana/web3.js';
 import { logger, logThinking, logCheckpoint, logStep, logAnalysis, logScoring } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
 import { ContractAnalyzer, ContractAnalysis } from './contract-analyzer';
 import { HoneypotDetector, HoneypotAnalysis } from './honeypot-detector';
 import { BlacklistManager, BlacklistCheckResult } from './blacklist-manager';
@@ -226,19 +227,20 @@ export class SafetyScorer {
 
       return analysis;
 
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
       logger.error('Error in safety analysis', {
         token: tokenAddress,
-        error: error.message
+        error: errorMsg
       });
 
-      logAnalysis('ERROR', `Safety analysis failed: ${error.message}`, { token: tokenShort });
+      logAnalysis('ERROR', `Safety analysis failed: ${errorMsg}`, { token: tokenShort });
 
       // Return unsafe on error (fail closed)
       return this.createHardRejectAnalysis(
         tokenAddress,
         'ANALYSIS_ERROR',
-        `Safety analysis failed: ${error.message}`
+        `Safety analysis failed: ${errorMsg}`
       );
     }
   }
@@ -269,8 +271,9 @@ export class SafetyScorer {
 
       return true;
 
-    } catch (error: any) {
-      logger.debug('Quick safety check failed', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Quick safety check failed', { error: errorMsg });
       return false;
     }
   }
@@ -344,8 +347,9 @@ export class SafetyScorer {
         score: analysis.overallScore
       });
 
-    } catch (error: any) {
-      logger.error('Error saving safety analysis', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error saving safety analysis', { error: errorMsg });
     }
   }
 }

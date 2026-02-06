@@ -82,20 +82,6 @@ router.get(
       auditLogsQuery += ` WHERE ${auditConditions.join(' AND ')}`;
     }
 
-    // Combine with UNION ALL and order by created_at
-    const combinedQuery = `
-      SELECT * FROM (
-        (${botLogsQuery})
-        UNION ALL
-        (${auditLogsQuery})
-      ) combined
-      ORDER BY created_at DESC
-      LIMIT $1 OFFSET $2
-    `;
-
-    // Execute queries
-    const allValues = [...botValues, ...auditValues, parsedLimit, parsedOffset];
-
     // We need to handle the parameterization differently for UNION
     // Execute each query separately and combine in JS
     const [botResult, auditResult] = await Promise.all([

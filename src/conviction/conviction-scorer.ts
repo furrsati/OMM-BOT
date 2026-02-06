@@ -438,7 +438,7 @@ export class ConvictionScorer {
     signal: AggregatedSignal,
     smartWalletScore: number,
     safetyScore: number,
-    convictionLevel: string
+    _convictionLevel: string
   ): string {
     const reasons: string[] = [];
 

@@ -50,7 +50,7 @@ router.get(
         decision_time,
         last_updated
       FROM token_opportunities
-      WHERE expires_at > NOW()
+      WHERE expires_at > NOW() AND status != 'REJECTED'
       ORDER BY
         CASE status
           WHEN 'ANALYZING' THEN 1

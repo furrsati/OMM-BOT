@@ -202,18 +202,19 @@ export class WeightOptimizer {
    */
   private getCategoryScore(fingerprint: TradeFingerprint, category: keyof CategoryWeights): number {
     switch (category) {
-      case 'smartWallet':
+      case 'smartWallet': {
         // Score based on wallet count and tiers
         const walletCount = fingerprint.smartWallets?.count || 0;
         const tierBonus = (fingerprint.smartWallets?.tiers || []).reduce((sum, t) => {
           return sum + (t === 1 ? 40 : t === 2 ? 25 : 10);
         }, 0);
         return Math.min(100, walletCount * 15 + tierBonus / Math.max(1, walletCount));
+      }
 
       case 'tokenSafety':
         return fingerprint.tokenSafety?.overallScore || 0;
 
-      case 'marketConditions':
+      case 'marketConditions': {
         // Score based on regime and trends
         const regimeScore = {
           'FULL': 80,
@@ -223,15 +224,17 @@ export class WeightOptimizer {
         }[fingerprint.marketConditions?.regime || 'CAUTIOUS'] || 50;
         const trendBonus = fingerprint.marketConditions?.solTrend === 'up' ? 20 : 0;
         return Math.min(100, regimeScore + trendBonus);
+      }
 
-      case 'socialSignals':
+      case 'socialSignals': {
         // Normalize social metrics to 0-100
         const followers = Math.min(fingerprint.socialSignals?.twitterFollowers || 0, 100000);
         const members = Math.min(fingerprint.socialSignals?.telegramMembers || 0, 10000);
         const velocity = Math.min(fingerprint.socialSignals?.mentionVelocity || 0, 1000);
         return Math.min(100, (followers / 1000) + (members / 100) + (velocity / 10));
+      }
 
-      case 'entryQuality':
+      case 'entryQuality': {
         // Score based on dip depth, ATH distance, age, and phase
         const dipScore = this.dipDepthScore(fingerprint.entryQuality?.dipDepth || 0);
         const athScore = Math.min(100, (fingerprint.entryQuality?.distanceFromATH || 0) * 2);
@@ -243,6 +246,7 @@ export class WeightOptimizer {
           'DUMP': 0
         }[fingerprint.entryQuality?.hypePhase || 'EARLY_FOMO'] || 50;
         return (dipScore + athScore + phaseScore) / 3;
+      }
 
       default:
         return 50;

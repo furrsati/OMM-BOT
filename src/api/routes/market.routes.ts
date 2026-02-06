@@ -41,19 +41,6 @@ router.get(
 
     const regimeState = ctx.regimeDetector.getRegimeState();
 
-    // Determine trend based on 24h change
-    const getSolTrend = (change: number) => {
-      if (change > 3) return 'UP';
-      if (change < -3) return 'DOWN';
-      return 'STABLE';
-    };
-
-    const getBtcTrend = (change: number) => {
-      if (change > 5) return 'UP';
-      if (change < -5) return 'DOWN';
-      return 'STABLE';
-    };
-
     res.json({
       success: true,
       data: {

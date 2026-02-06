@@ -17,6 +17,7 @@
 
 import { Connection, PublicKey } from '@solana/web3.js';
 import { logger } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
 import { query } from '../db/postgres';
 
 export interface BlacklistCheckResult {
@@ -48,9 +49,10 @@ export class BlacklistManager {
         entriesLoaded: this.cache.size
       });
 
-    } catch (error: any) {
-      logger.error('Error initializing blacklist manager', { error: error.message });
-      throw error;
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error initializing blacklist manager', { error: errorMsg });
+      throw new Error(errorMsg);
     }
   }
 
@@ -114,9 +116,10 @@ export class BlacklistManager {
       //   JSON.stringify({ type, reason, depth, timestamp: Date.now() })
       // );
 
-    } catch (error: any) {
-      logger.error('Error adding to blacklist', { error: error.message });
-      throw error;
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error adding to blacklist', { error: errorMsg });
+      throw new Error(errorMsg);
     }
   }
 
@@ -157,8 +160,9 @@ export class BlacklistManager {
         await this.addToBlacklist(entry.address, entry.type, `Community: ${entry.reason}`, 0);
         imported++;
 
-      } catch (error: any) {
-        logger.warn(`Invalid blacklist entry: ${entry.address}`, { error: error.message });
+      } catch (error: unknown) {
+        const errorMsg = getErrorMessage(error);
+        logger.warn(`Invalid blacklist entry: ${entry.address}`, { error: errorMsg });
       }
     }
 
@@ -199,8 +203,9 @@ export class BlacklistManager {
 
       logger.warn(`🚫 Blacklisted rug and ${connectedWallets.length} connected wallets`);
 
-    } catch (error: any) {
-      logger.error('Error blacklisting rug', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error blacklisting rug', { error: errorMsg });
     }
   }
 
@@ -232,8 +237,9 @@ export class BlacklistManager {
         recentlyAdded: parseInt(row.recent)
       };
 
-    } catch (error: any) {
-      logger.error('Error getting blacklist stats', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error getting blacklist stats', { error: errorMsg });
       return {
         totalEntries: 0,
         wallets: 0,
@@ -288,8 +294,9 @@ export class BlacklistManager {
         };
       }
 
-    } catch (error: any) {
-      logger.debug('Error checking blacklist', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error checking blacklist', { error: errorMsg });
     }
 
     return {
@@ -331,8 +338,9 @@ export class BlacklistManager {
         blacklistedAddress: null
       };
 
-    } catch (error: any) {
-      logger.debug('Error checking connections', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error checking connections', { error: errorMsg });
       return {
         isBlacklisted: false,
         reason: null,
@@ -362,8 +370,9 @@ export class BlacklistManager {
       // For now, return empty array
       return [];
 
-    } catch (error: any) {
-      logger.debug('Error finding connected wallets', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error finding connected wallets', { error: errorMsg });
       return [];
     }
   }
@@ -381,8 +390,9 @@ export class BlacklistManager {
 
       logger.info(`Loaded ${result.rows.length} blacklist entries to cache`);
 
-    } catch (error: any) {
-      logger.error('Error loading blacklist to cache', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error loading blacklist to cache', { error: errorMsg });
     }
   }
 

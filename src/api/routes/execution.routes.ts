@@ -90,7 +90,7 @@ router.get(
     }
 
     // Get network stats
-    let networkStats = {
+    const networkStats = {
       tps: 0,
       congestionLevel: 'low' as 'low' | 'medium' | 'high' | 'critical',
       avgBlockTime: 400,

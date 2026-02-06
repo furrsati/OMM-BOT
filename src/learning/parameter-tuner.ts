@@ -1,6 +1,6 @@
 import { logger } from '../utils/logger';
-import { query, transaction } from '../db/postgres';
-import type { Trade, BotParameters, TradeFingerprint } from '../types';
+import { query } from '../db/postgres';
+import type { Trade, TradeFingerprint } from '../types';
 
 /**
  * LEARNING ENGINE - LEVEL 3: PARAMETER TUNING
@@ -252,14 +252,12 @@ export class ParameterTuner {
     for (let threshold = 1; threshold <= 5; threshold++) {
       // Calculate aggregate stats for trades with >= threshold wallets
       let totalWins = 0;
-      let totalLosses = 0;
       let totalReturn = 0;
       let totalCount = 0;
 
       for (const [count, stats] of Object.entries(buckets)) {
         if (Number(count) >= threshold) {
           totalWins += stats.wins;
-          totalLosses += stats.losses;
           totalReturn += stats.totalReturn;
           totalCount += stats.count;
         }
@@ -424,7 +422,7 @@ export class ParameterTuner {
 
     // If many stops triggered at close to the stop level, it might be too tight
     const avgLoss = lossPercentages.reduce((s, l) => s + l, 0) / lossPercentages.length;
-    const medianLoss = lossPercentages[Math.floor(lossPercentages.length / 2)];
+    void avgLoss; // Used for analysis context
 
     // Count trades that stopped out very close to the stop level
     const tightStops = stopLossTrades.filter(t => {
@@ -489,11 +487,8 @@ export class ParameterTuner {
       .map(t => t.profitLossPercent || 0)
       .sort((a, b) => b - a);
 
-    // Calculate percentiles
-    const p25 = profitDistribution[Math.floor(profitDistribution.length * 0.25)];
-    const p50 = profitDistribution[Math.floor(profitDistribution.length * 0.5)];
-    const p75 = profitDistribution[Math.floor(profitDistribution.length * 0.75)];
-    const p90 = profitDistribution[Math.floor(profitDistribution.length * 0.9)];
+    // Percentiles available for future detailed analysis:
+    // p25, p50, p75, p90 of profit distribution
 
     // Analyze each take-profit level
     for (let i = 0; i < currentLevels.length; i++) {
@@ -549,10 +544,7 @@ export class ParameterTuner {
     const currentParams = await this.getCurrentParameters();
     const currentHours = currentParams.timeBasedStopHours || DEFAULT_PARAMETERS.timeBasedStopHours;
 
-    // Find trades that exited via time-based stop
-    const timeStopTrades = trades.filter(t => t.exitReason === 'time_stop');
-
-    // Also analyze all trades by duration
+    // Analyze all trades by duration
     const tradesByDuration: Record<string, BucketStats> = {
       '0-2h': { bucket: '0-2h', count: 0, wins: 0, losses: 0, winRate: 0, avgReturn: 0, totalReturn: 0 },
       '2-4h': { bucket: '2-4h', count: 0, wins: 0, losses: 0, winRate: 0, avgReturn: 0, totalReturn: 0 },

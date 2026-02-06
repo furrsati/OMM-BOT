@@ -37,7 +37,6 @@ router.get(
     const row = tradesResult.rows[0];
     const totalTrades = parseInt(row.total_trades || '0', 10);
     const wins = parseInt(row.wins || '0', 10);
-    const losses = parseInt(row.losses || '0', 10);
     const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
 
     // Calculate profit factor

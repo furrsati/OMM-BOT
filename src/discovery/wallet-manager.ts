@@ -251,7 +251,7 @@ export class WalletManager {
       }
 
       // Deactivate wallets outside top 100 by score
-      const pruneResult = await query(
+      await query(
         `UPDATE smart_wallets
          SET is_active = false, notes = 'Pruned: Outside top 100', updated_at = NOW()
          WHERE address IN (

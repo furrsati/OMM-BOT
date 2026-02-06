@@ -304,7 +304,8 @@ export function validateParams<T>(schema: ZodSchema<T>) {
 export function sanitizeString(input: string): string {
   return input
     .replace(/[<>]/g, '') // Remove angle brackets (XSS)
-    .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f]/g, '') // Remove control characters
     .trim();
 }
 

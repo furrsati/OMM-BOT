@@ -16,6 +16,7 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { getMint, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { logger } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
 
 export interface ContractAnalysis {
   tokenAddress: string;
@@ -147,12 +148,13 @@ export class ContractAnalyzer {
 
       return analysis;
 
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
       logger.error('Error analyzing contract', {
         token: tokenAddress,
-        error: error.message
+        error: errorMsg
       });
-      throw error;
+      throw new Error(errorMsg);
     }
   }
 
@@ -242,8 +244,9 @@ export class ContractAnalyzer {
         holderCount
       };
 
-    } catch (error: any) {
-      logger.error('Error analyzing holder distribution', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error analyzing holder distribution', { error: errorMsg });
       return {
         topHolderPercent: 0,
         top10HolderPercent: 0,
@@ -307,8 +310,9 @@ export class ContractAnalyzer {
         lpHolders: []
       };
 
-    } catch (error: any) {
-      logger.error('Error analyzing liquidity', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error analyzing liquidity', { error: errorMsg });
       return {
         locked: false,
         depth: 0,
@@ -350,8 +354,9 @@ export class ContractAnalyzer {
 
       return { depth: 0 };
 
-    } catch (error: any) {
-      logger.debug('Error fetching from DexScreener', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error fetching from DexScreener', { error: errorMsg });
       return { depth: 0 };
     }
   }
@@ -374,8 +379,9 @@ export class ContractAnalyzer {
       const result = await this.checkLPTokenLock(raydiumLP.lpMint);
       return { locked: result.locked, lpHolders: result.holders };
 
-    } catch (error: any) {
-      logger.debug('Error checking LP lock status', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error checking LP lock status', { error: errorMsg });
       return { locked: false, lpHolders: [] };
     }
   }
@@ -388,7 +394,8 @@ export class ContractAnalyzer {
     liquidityUSD: number;
   } | null> {
     try {
-      const tokenPubkey = new PublicKey(tokenAddress);
+      // tokenPubkey used for filtering in production implementation
+      void new PublicKey(tokenAddress);
 
       // Get accounts associated with the Raydium AMM program that involve this token
       const accounts = await this.connection.getProgramAccounts(
@@ -426,8 +433,9 @@ export class ContractAnalyzer {
 
       return null;
 
-    } catch (error: any) {
-      logger.debug('Error finding Raydium LP', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error finding Raydium LP', { error: errorMsg });
       return null;
     }
   }
@@ -502,8 +510,9 @@ export class ContractAnalyzer {
 
       return { locked, holders };
 
-    } catch (error: any) {
-      logger.debug('Error checking LP token lock', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error checking LP token lock', { error: errorMsg });
       return { locked: false, holders: [] };
     }
   }
@@ -556,8 +565,9 @@ export class ContractAnalyzer {
 
       return !isTokenProgram;
 
-    } catch (error: any) {
-      logger.debug('Error checking upgradeable', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error checking upgradeable', { error: errorMsg });
       return false;
     }
   }
@@ -567,9 +577,9 @@ export class ContractAnalyzer {
    */
   private async detectHiddenMint(tokenAddress: string): Promise<boolean> {
     try {
-      // Get recent transaction history
+      // Get recent transaction history for analysis
       const tokenPubkey = new PublicKey(tokenAddress);
-      const signatures = await this.connection.getSignaturesForAddress(
+      await this.connection.getSignaturesForAddress(
         tokenPubkey,
         { limit: 100 }
       );
@@ -582,8 +592,9 @@ export class ContractAnalyzer {
 
       return false;
 
-    } catch (error: any) {
-      logger.debug('Error detecting hidden mint', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.debug('Error detecting hidden mint', { error: errorMsg });
       return false;
     }
   }
@@ -695,8 +706,9 @@ export class ContractAnalyzer {
 
       return true;
 
-    } catch (error: any) {
-      logger.error('Error in quick safety check', { error: error.message });
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error);
+      logger.error('Error in quick safety check', { error: errorMsg });
       return false;
     }
   }

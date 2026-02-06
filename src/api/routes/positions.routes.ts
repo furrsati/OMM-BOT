@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware';
-import { botContextManager } from '../services/bot-context';
 import { getPool } from '../../db/postgres';
 
 const router = Router();
@@ -11,9 +10,7 @@ const router = Router();
  */
 router.get(
   '/current',
-  asyncHandler(async (req: any, res: any) => {
-    const ctx = botContextManager.getContext();
-
+  asyncHandler(async (_req: any, res: any) => {
     // Get all open positions from database
     const result = await getPool().query(
       `SELECT
@@ -166,7 +163,6 @@ router.post(
   '/:id/close',
   asyncHandler(async (req: any, res: any) => {
     const { id } = req.params;
-    const ctx = botContextManager.getContext();
 
     // Get position
     const result = await getPool().query(

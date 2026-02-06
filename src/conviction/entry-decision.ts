@@ -262,7 +262,7 @@ export class EntryDecisionEngine {
    */
   private checkHardRejects(
     signal: AggregatedSignal,
-    conviction: ConvictionScore
+    _conviction: ConvictionScore
   ): { passed: boolean; reason: string | null } {
     // Hard reject from safety analysis
     if (signal.safety.isHardRejected) {
