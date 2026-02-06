@@ -18,8 +18,10 @@ export const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.
 export const BOT_API_KEY = process.env.BOT_API_KEY || '';
 
 // Default timeout for API requests (in milliseconds)
-export const API_TIMEOUT = 10000;
-export const CRITICAL_API_TIMEOUT = 60000; // For operations like kill switch
+// Reduced timeouts for better UX - fail fast rather than hang
+export const API_TIMEOUT = 5000; // Reduced from 10s
+export const CRITICAL_API_TIMEOUT = 30000; // Reduced from 60s for kill switch
+export const CONTROL_API_TIMEOUT = 8000; // For start/stop/pause operations
 
 /**
  * Fetch from the bot backend with consistent error handling

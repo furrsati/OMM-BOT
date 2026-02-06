@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchFromBackend, backendUnavailableResponse, CRITICAL_API_TIMEOUT } from '@/lib/api';
+import { fetchFromBackend, backendUnavailableResponse, CRITICAL_API_TIMEOUT, CONTROL_API_TIMEOUT } from '@/lib/api';
 
 export async function POST(
   request: NextRequest,
@@ -11,7 +11,8 @@ export async function POST(
     const body = await request.json().catch(() => ({}));
 
     // Kill switch needs longer timeout for emergency position exits
-    const timeoutMs = action === 'kill' ? CRITICAL_API_TIMEOUT : 15000;
+    // Other control actions use shorter timeout for better UX
+    const timeoutMs = action === 'kill' ? CRITICAL_API_TIMEOUT : CONTROL_API_TIMEOUT;
 
     const response = await fetchFromBackend(`/api/bot/${action}`, {
       method: 'POST',

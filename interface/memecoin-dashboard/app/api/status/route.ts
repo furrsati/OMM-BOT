@@ -16,8 +16,10 @@ export async function GET() {
     });
 
     if (response.ok) {
-      const data = await response.json();
-      return NextResponse.json({ success: true, data });
+      // Backend already returns { success: true, data: {...} }
+      // Pass it through directly without double-wrapping
+      const backendResponse = await response.json();
+      return NextResponse.json(backendResponse);
     }
 
     // Backend returned an error
