@@ -1,8 +1,18 @@
 import { Router } from 'express';
-import { asyncHandler } from '../middleware';
+import {
+  asyncHandler,
+  requireAuth,
+  validateBody,
+  validateParams,
+  schemas,
+  auditLog,
+} from '../middleware';
 import { getPool } from '../../db/postgres';
 
 const router = Router();
+
+// Require authentication for modification routes only
+// GET routes are read-only and less sensitive
 
 /**
  * GET /api/smart-wallets
@@ -103,16 +113,12 @@ router.get(
  */
 router.post(
   '/',
+  requireAuth,
+  validateBody(schemas.smartWalletCreate),
+  auditLog('SMART_WALLET_ADD'),
   asyncHandler(async (req: any, res: any) => {
-    const { address, tier = 3, notes } = req.body;
-
-    if (!address || address.length !== 44) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid wallet address',
-        code: 'INVALID_ADDRESS',
-      });
-    }
+    const { address, tier, notes } = req.body;
+    // Validation is handled by schema
 
     // Check if wallet already exists
     const existing = await getPool().query(
@@ -155,6 +161,10 @@ router.post(
  */
 router.patch(
   '/:id',
+  requireAuth,
+  validateParams(schemas.idParam),
+  validateBody(schemas.smartWalletUpdate),
+  auditLog('SMART_WALLET_UPDATE'),
   asyncHandler(async (req: any, res: any) => {
     const { id } = req.params;
     const { tier, notes, isCrowded, isActive } = req.body;
@@ -164,13 +174,7 @@ router.patch(
     let paramIndex = 1;
 
     if (tier !== undefined) {
-      if (![1, 2, 3].includes(tier)) {
-        return res.status(400).json({
-          success: false,
-          error: 'Tier must be 1, 2, or 3',
-          code: 'INVALID_TIER',
-        });
-      }
+      // Validation handled by schema
       updates.push(`tier = $${paramIndex++}`);
       values.push(tier);
     }
@@ -228,6 +232,9 @@ router.patch(
  */
 router.delete(
   '/:id',
+  requireAuth,
+  validateParams(schemas.idParam),
+  auditLog('SMART_WALLET_REMOVE'),
   asyncHandler(async (req: any, res: any) => {
     const { id } = req.params;
 

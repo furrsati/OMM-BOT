@@ -1,9 +1,24 @@
 import { Router } from 'express';
-import { asyncHandler } from '../middleware';
+import {
+  asyncHandler,
+  requireAuth,
+  validateBody,
+  validateParams,
+  validateQuery,
+  schemas,
+  auditLog,
+} from '../middleware';
 import { botContextManager } from '../services/bot-context';
 import { getPool } from '../../db/postgres';
+import { z } from 'zod';
 
 const router = Router();
+
+// Query schema for blacklist filtering
+const blacklistQuerySchema = z.object({
+  type: z.enum(['wallet', 'contract', 'deployer']).optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+});
 
 /**
  * GET /api/safety
@@ -86,16 +101,10 @@ router.get(
  */
 router.post(
   '/check',
+  validateBody(schemas.tokenCheck),
   asyncHandler(async (req: any, res: any) => {
     const { tokenAddress } = req.body;
-
-    if (!tokenAddress || tokenAddress.length !== 44) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid token address',
-        code: 'INVALID_ADDRESS',
-      });
-    }
+    // Validation handled by schema
 
     const ctx = botContextManager.getContext();
     const checks: Array<{ name: string; status: string; details: string; points: number }> = [];
@@ -186,8 +195,9 @@ router.post(
  */
 router.get(
   '/blacklist',
+  validateQuery(blacklistQuerySchema),
   asyncHandler(async (req: any, res: any) => {
-    const { type, limit = 100 } = req.query;
+    const { type, limit } = req.query;
 
     let query = `SELECT id, address, type, reason, depth, evidence, created_at FROM blacklist`;
     const values: any[] = [];
@@ -198,7 +208,7 @@ router.get(
     }
 
     query += ` ORDER BY created_at DESC LIMIT $${values.length + 1}`;
-    values.push(parseInt(limit as string, 10));
+    values.push(limit);
 
     const result = await getPool().query(query, values);
 
@@ -225,24 +235,12 @@ router.get(
  */
 router.post(
   '/blacklist',
+  requireAuth,
+  validateBody(schemas.blacklistCreate),
+  auditLog('BLACKLIST_ADD'),
   asyncHandler(async (req: any, res: any) => {
-    const { address, type = 'wallet', reason } = req.body;
-
-    if (!address || address.length !== 44) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid address',
-        code: 'INVALID_ADDRESS',
-      });
-    }
-
-    if (!reason) {
-      return res.status(400).json({
-        success: false,
-        error: 'Reason is required',
-        code: 'REASON_REQUIRED',
-      });
-    }
+    const { address, type, reason } = req.body;
+    // Validation handled by schema
 
     // Check if already blacklisted
     const existing = await getPool().query(
@@ -282,6 +280,9 @@ router.post(
  */
 router.delete(
   '/blacklist/:id',
+  requireAuth,
+  validateParams(schemas.idParam),
+  auditLog('BLACKLIST_REMOVE'),
   asyncHandler(async (req: any, res: any) => {
     const { id } = req.params;
 

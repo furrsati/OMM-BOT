@@ -1,8 +1,17 @@
 import { Router } from 'express';
-import { asyncHandler } from '../middleware';
+import {
+  asyncHandler,
+  requireAuth,
+  validateBody,
+  schemas,
+  auditLog,
+} from '../middleware';
 import { getPool } from '../../db/postgres';
 
 const router = Router();
+
+// Require authentication for all settings routes
+router.use(requireAuth);
 
 // Default settings structure
 const DEFAULT_SETTINGS = {
@@ -142,6 +151,8 @@ router.get(
  */
 router.put(
   '/',
+  validateBody(schemas.settingsUpdate),
+  auditLog('SETTINGS_UPDATE'),
   asyncHandler(async (req: any, res: any) => {
     const updates = req.body;
 
@@ -238,6 +249,7 @@ router.put(
  */
 router.post(
   '/reset',
+  auditLog('SETTINGS_RESET'),
   asyncHandler(async (_req: any, res: any) => {
     // Delete all settings and re-insert defaults
     await getPool().query(`DELETE FROM bot_settings`);

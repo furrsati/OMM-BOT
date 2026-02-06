@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
+import { fetchFromBackend, backendUnavailableResponse } from '@/lib/api';
 
 export async function DELETE(
   request: NextRequest,
@@ -9,9 +8,9 @@ export async function DELETE(
   const { id } = await params;
 
   try {
-    const response = await fetch(`${BOT_API_URL}/api/alerts/${id}`, {
+    const response = await fetchFromBackend(`/api/alerts/${id}`, {
       method: 'DELETE',
-      signal: AbortSignal.timeout(10000),
+      timeout: 10000,
     });
 
     if (response.ok) {
@@ -19,16 +18,13 @@ export async function DELETE(
       return NextResponse.json(data);
     }
     return NextResponse.json({
-      success: false,
-      error: 'Backend returned error',
+      ...backendUnavailableResponse('Backend returned error'),
       isOffline: true,
     }, { status: 503 });
   } catch (error) {
     console.error('Backend connection failed:', error);
     return NextResponse.json({
-      success: false,
-      error: 'Backend unavailable',
-      message: 'Cannot connect to trading bot backend',
+      ...backendUnavailableResponse(),
       isOffline: true,
     }, { status: 503 });
   }

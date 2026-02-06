@@ -26,14 +26,30 @@ export function initializePostgres(): Pool {
     throw new Error('DATABASE_URL environment variable is required');
   }
 
+  // Determine SSL configuration
+  // SECURITY: Always use SSL for remote databases
+  const isRemoteDb = connectionString.includes('render.com') ||
+    connectionString.includes('dpg-') ||
+    connectionString.includes('neon.tech') ||
+    connectionString.includes('supabase.co') ||
+    !connectionString.includes('localhost');
+
+  // SSL configuration - prefer verified connections
+  // Set DATABASE_SSL_REJECT_UNAUTHORIZED=false only if absolutely necessary
+  const sslConfig = isRemoteDb ? {
+    rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false',
+  } : false;
+
+  if (isRemoteDb && process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'false') {
+    logger.warn('Database SSL certificate verification disabled - this is insecure');
+  }
+
   pool = new Pool({
     connectionString,
     max: 20, // Maximum pool size
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000, // 10 seconds - more resilient for cold starts
-    ssl: connectionString.includes('render.com') || connectionString.includes('dpg-') ? {
-      rejectUnauthorized: false // Required for Render PostgreSQL
-    } : false
+    ssl: sslConfig,
   });
 
   // Handle pool errors

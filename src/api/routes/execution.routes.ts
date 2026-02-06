@@ -191,15 +191,113 @@ router.post(
   asyncHandler(async (req: any, res: any) => {
     const { name } = req.body;
 
-    // TODO: Implement actual RPC switching
-    // This would require updating the connection in bot context
+    // Map name to RPC URL from environment
+    let rpcUrl: string | undefined;
+
+    switch (name?.toLowerCase()) {
+      case 'primary':
+      case 'primary rpc':
+        rpcUrl = process.env.SOLANA_RPC_PRIMARY;
+        break;
+      case 'secondary':
+      case 'secondary rpc':
+        rpcUrl = process.env.SOLANA_RPC_SECONDARY;
+        break;
+      case 'tertiary':
+      case 'tertiary rpc':
+        rpcUrl = process.env.SOLANA_RPC_TERTIARY;
+        break;
+      default:
+        // Check if name is a URL
+        if (name?.startsWith('http')) {
+          rpcUrl = name;
+        }
+    }
+
+    if (!rpcUrl) {
+      return res.status(400).json({
+        success: false,
+        error: `RPC endpoint '${name}' not found or not configured`,
+        code: 'RPC_NOT_FOUND',
+      });
+    }
+
+    // Test and switch to the new RPC
+    const result = await botContextManager.switchRpcConnection(rpcUrl);
+
+    if (!result.success) {
+      return res.status(503).json({
+        success: false,
+        error: `Failed to switch RPC: ${result.error}`,
+        code: 'RPC_SWITCH_FAILED',
+        data: {
+          name,
+          latency: result.latency,
+        },
+      });
+    }
+
+    // Log the switch
+    try {
+      await getPool().query(
+        `INSERT INTO audit_log (action, actor, details)
+         VALUES ($1, $2, $3)`,
+        [
+          'RPC_SWITCH',
+          'api',
+          JSON.stringify({
+            name,
+            latency: result.latency,
+            timestamp: new Date().toISOString(),
+          }),
+        ]
+      );
+    } catch (logError) {
+      console.error('Failed to log RPC switch:', logError);
+    }
 
     res.json({
       success: true,
-      message: `Primary RPC switch requested for ${name}`,
+      message: `Successfully switched to ${name}`,
       data: {
         name,
-        note: 'RPC switching not yet fully implemented',
+        latency: result.latency,
+        status: 'connected',
+      },
+    });
+  })
+);
+
+/**
+ * GET /api/execution/rpc/available
+ * Get list of available RPC endpoints
+ */
+router.get(
+  '/rpc/available',
+  asyncHandler(async (_req: any, res: any) => {
+    const available: Array<{ name: string; configured: boolean }> = [
+      {
+        name: 'Primary RPC',
+        configured: !!process.env.SOLANA_RPC_PRIMARY,
+      },
+      {
+        name: 'Secondary RPC',
+        configured: !!process.env.SOLANA_RPC_SECONDARY,
+      },
+      {
+        name: 'Tertiary RPC',
+        configured: !!process.env.SOLANA_RPC_TERTIARY,
+      },
+    ];
+
+    // Get current connection info
+    const currentInfo = botContextManager.getConnectionInfo();
+
+    res.json({
+      success: true,
+      data: {
+        available: available.filter(r => r.configured),
+        current: currentInfo,
       },
     });
   })

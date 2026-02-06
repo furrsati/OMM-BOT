@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
+import { fetchFromBackend, backendUnavailableResponse, CRITICAL_API_TIMEOUT } from '@/lib/api';
 
 export async function POST(
   request: NextRequest,
@@ -12,13 +11,12 @@ export async function POST(
     const body = await request.json().catch(() => ({}));
 
     // Kill switch needs longer timeout for emergency position exits
-    const timeoutMs = action === 'kill' ? 60000 : 15000;
+    const timeoutMs = action === 'kill' ? CRITICAL_API_TIMEOUT : 15000;
 
-    const response = await fetch(`${BOT_API_URL}/api/bot/${action}`, {
+    const response = await fetchFromBackend(`/api/bot/${action}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      timeout: timeoutMs,
     });
 
     if (response.ok) {
@@ -27,21 +25,16 @@ export async function POST(
     }
 
     return NextResponse.json({
-      success: false,
-      error: 'Backend returned error',
+      ...backendUnavailableResponse('Backend returned error'),
       action,
       status: response.status,
-      backendUrl: BOT_API_URL,
       isOffline: true,
     }, { status: 503 });
   } catch (error) {
     console.error('Backend connection failed:', error);
     return NextResponse.json({
-      success: false,
-      error: 'Backend unavailable',
+      ...backendUnavailableResponse(),
       action,
-      message: 'Cannot connect to trading bot backend. Ensure BOT_API_URL is set correctly in Render environment variables.',
-      backendUrl: BOT_API_URL,
       isOffline: true,
     }, { status: 503 });
   }

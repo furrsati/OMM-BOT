@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-
-const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
+import { fetchFromBackend, backendUnavailableResponse } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,25 +7,25 @@ export async function GET() {
   try {
     // Fetch all learning data from multiple endpoints
     const [weightsRes, parametersRes, patternsRes, snapshotsRes, statsRes] = await Promise.all([
-      fetch(`${BOT_API_URL}/api/learning/weights`, {
+      fetchFromBackend('/api/learning/weights', {
         cache: 'no-store',
-        signal: AbortSignal.timeout(10000),
+        timeout: 10000,
       }),
-      fetch(`${BOT_API_URL}/api/learning/parameters`, {
+      fetchFromBackend('/api/learning/parameters', {
         cache: 'no-store',
-        signal: AbortSignal.timeout(10000),
+        timeout: 10000,
       }),
-      fetch(`${BOT_API_URL}/api/learning/patterns`, {
+      fetchFromBackend('/api/learning/patterns', {
         cache: 'no-store',
-        signal: AbortSignal.timeout(10000),
+        timeout: 10000,
       }),
-      fetch(`${BOT_API_URL}/api/learning/snapshots?limit=1`, {
+      fetchFromBackend('/api/learning/snapshots?limit=1', {
         cache: 'no-store',
-        signal: AbortSignal.timeout(10000),
+        timeout: 10000,
       }),
-      fetch(`${BOT_API_URL}/api/learning/stats`, {
+      fetchFromBackend('/api/learning/stats', {
         cache: 'no-store',
-        signal: AbortSignal.timeout(10000),
+        timeout: 10000,
       }).catch(() => null), // Stats endpoint might not exist yet
     ]);
 
@@ -92,19 +91,14 @@ export async function GET() {
     }
 
     return NextResponse.json({
-      success: false,
-      error: 'Backend returned error',
+      ...backendUnavailableResponse('Backend returned error'),
       status: weightsRes.status,
-      backendUrl: BOT_API_URL,
       isOffline: true,
     }, { status: 503 });
   } catch (error) {
     console.error('Backend connection failed:', error);
     return NextResponse.json({
-      success: false,
-      error: 'Backend unavailable',
-      message: 'Cannot connect to trading bot backend. Ensure BOT_API_URL is set correctly in Render environment variables.',
-      backendUrl: BOT_API_URL,
+      ...backendUnavailableResponse(),
       isOffline: true,
     }, { status: 503 });
   }

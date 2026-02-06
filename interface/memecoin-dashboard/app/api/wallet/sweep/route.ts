@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
-
-const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
+import { fetchFromBackend, backendUnavailableResponse, CRITICAL_API_TIMEOUT } from '@/lib/api';
 
 export async function POST() {
   try {
-    const response = await fetch(`${BOT_API_URL}/api/wallet/sweep`, {
+    const response = await fetchFromBackend('/api/wallet/sweep', {
       method: 'POST',
-      signal: AbortSignal.timeout(30000),
+      timeout: CRITICAL_API_TIMEOUT,
     });
 
     if (response.ok) {
@@ -14,16 +13,13 @@ export async function POST() {
       return NextResponse.json(data);
     }
     return NextResponse.json({
-      success: false,
-      error: 'Backend returned error',
+      ...backendUnavailableResponse('Backend returned error'),
       isOffline: true,
     }, { status: 503 });
   } catch (error) {
     console.error('Backend connection failed:', error);
     return NextResponse.json({
-      success: false,
-      error: 'Backend unavailable',
-      message: 'Cannot connect to trading bot backend',
+      ...backendUnavailableResponse(),
       isOffline: true,
     }, { status: 503 });
   }

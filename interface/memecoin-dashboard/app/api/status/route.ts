@@ -1,15 +1,18 @@
 import { NextResponse } from 'next/server';
-
-const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
+import {
+  fetchFromBackend,
+  backendUnavailableResponse,
+  BOT_API_URL,
+} from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function GET() {
   try {
-    const response = await fetch(`${BOT_API_URL}/api/status`, {
+    const response = await fetchFromBackend('/api/status', {
       cache: 'no-store',
-      signal: AbortSignal.timeout(5000),
+      timeout: 5000,
     });
 
     if (response.ok) {
@@ -29,10 +32,7 @@ export async function GET() {
     // Backend not available
     console.error('Backend connection failed:', error);
     return NextResponse.json({
-      success: false,
-      error: 'Backend unavailable',
-      message: 'Cannot connect to trading bot backend. Ensure BOT_API_URL is set correctly in Render environment variables.',
-      backendUrl: BOT_API_URL,
+      ...backendUnavailableResponse('Cannot connect to trading bot backend. Ensure BOT_API_URL is set correctly.'),
       isOffline: true,
     }, { status: 503 });
   }

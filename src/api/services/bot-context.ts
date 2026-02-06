@@ -100,6 +100,48 @@ class BotContextManager {
   isTradingEnabled(): boolean {
     return this.context?.tradingEnabled ?? process.env.ENABLE_TRADING === 'true';
   }
+
+  /**
+   * Switch to a new RPC connection
+   */
+  async switchRpcConnection(rpcUrl: string): Promise<{ success: boolean; latency: number; error?: string }> {
+    const startTime = Date.now();
+    try {
+      // Create new connection
+      const newConnection = new Connection(rpcUrl, {
+        commitment: 'confirmed',
+        confirmTransactionInitialTimeout: 60000,
+      });
+
+      // Test the new connection
+      await newConnection.getSlot();
+
+      // Update context with new connection
+      if (this.context) {
+        this.context.connection = newConnection;
+      }
+
+      const latency = Date.now() - startTime;
+      return { success: true, latency };
+    } catch (error: any) {
+      return {
+        success: false,
+        latency: Date.now() - startTime,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Get current connection info
+   */
+  getConnectionInfo(): { endpoint: string; commitment: string } | null {
+    if (!this.context) return null;
+    return {
+      endpoint: this.context.connection.rpcEndpoint,
+      commitment: this.context.connection.commitment || 'confirmed',
+    };
+  }
 }
 
 // Export singleton instance

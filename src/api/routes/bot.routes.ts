@@ -1,5 +1,13 @@
 import { Router } from 'express';
-import { asyncHandler, controlLimiter } from '../middleware';
+import {
+  asyncHandler,
+  controlLimiter,
+  criticalLimiter,
+  requireAuth,
+  validateBody,
+  schemas,
+  auditLog,
+} from '../middleware';
 import { botContextManager } from '../services/bot-context';
 
 const router = Router();
@@ -7,12 +15,16 @@ const router = Router();
 // Apply rate limiting to all bot control routes
 router.use(controlLimiter);
 
+// Require authentication for all bot control routes
+router.use(requireAuth);
+
 /**
  * POST /api/bot/start
  * Start the bot
  */
 router.post(
   '/start',
+  auditLog('BOT_START'),
   asyncHandler(async (req: any, res: any) => {
     const ctx = botContextManager.getContext();
 
@@ -42,6 +54,7 @@ router.post(
  */
 router.post(
   '/stop',
+  auditLog('BOT_STOP'),
   asyncHandler(async (req: any, res: any) => {
     const ctx = botContextManager.getContext();
 
@@ -71,6 +84,7 @@ router.post(
  */
 router.post(
   '/pause',
+  auditLog('BOT_PAUSE'),
   asyncHandler(async (req: any, res: any) => {
     const ctx = botContextManager.getContext();
 
@@ -100,6 +114,7 @@ router.post(
  */
 router.post(
   '/resume',
+  auditLog('BOT_RESUME'),
   asyncHandler(async (req: any, res: any) => {
     const ctx = botContextManager.getContext();
 
@@ -126,9 +141,12 @@ router.post(
 /**
  * POST /api/bot/kill
  * Emergency kill switch - stop all trading and exit all positions
+ * SECURITY: Critical operation with extra rate limiting
  */
 router.post(
   '/kill',
+  criticalLimiter,
+  auditLog('BOT_KILL'),
   asyncHandler(async (req: any, res: any) => {
     const ctx = botContextManager.getContext();
 
@@ -153,6 +171,8 @@ router.post(
  */
 router.post(
   '/config',
+  validateBody(schemas.botConfig),
+  auditLog('CONFIG_UPDATE'),
   asyncHandler(async (req: any, res: any) => {
     const ctx = botContextManager.getContext();
     const { paperTradingMode, tradingEnabled } = req.body;
@@ -201,17 +221,12 @@ router.post(
  */
 router.post(
   '/regime',
+  validateBody(schemas.regimeOverride),
+  auditLog('REGIME_OVERRIDE'),
   asyncHandler(async (req: any, res: any) => {
     const ctx = botContextManager.getContext();
     const { regime } = req.body;
-
-    const validRegimes = ['FULL', 'CAUTIOUS', 'DEFENSIVE', 'PAUSE'];
-    if (!validRegimes.includes(regime)) {
-      return res.status(400).json({
-        success: false,
-        error: `Invalid regime. Must be one of: ${validRegimes.join(', ')}`,
-      });
-    }
+    // Validation is handled by schema
 
     ctx.regimeDetector.setManualOverride(regime);
 
