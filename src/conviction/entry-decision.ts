@@ -14,6 +14,7 @@
 import { logger, logThinking, logCheckpoint, logStep, logDecision } from '../utils/logger';
 import { AggregatedSignal } from './signal-aggregator';
 import { ConvictionScore } from './conviction-scorer';
+import { query } from '../db/postgres';
 
 export interface EntryDecision {
   shouldEnter: boolean;
@@ -320,26 +321,78 @@ export class EntryDecisionEngine {
   }
 
   /**
-   * Get current portfolio limits
+   * Get current portfolio limits from database
    */
   private async getPortfolioLimits(): Promise<PortfolioLimits> {
     try {
-      // STUB: In production, calculate from database
-      // For now, return mock data
+      // Calculate daily P&L from trades closed today
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const dailyTradesResult = await query<{ total_pnl: string }>(`
+        SELECT COALESCE(SUM(profit_loss_percent), 0) as total_pnl
+        FROM trades
+        WHERE exit_time >= $1
+        AND exit_time IS NOT NULL
+      `, [todayStart.toISOString()]);
+
+      const dailyPnL = parseFloat(dailyTradesResult.rows[0]?.total_pnl || '0');
+
+      // Count open positions and calculate total exposure
+      const positionsResult = await query<{ count: string; total_exposure: string }>(`
+        SELECT
+          COUNT(*) as count,
+          COALESCE(SUM(
+            CASE
+              WHEN remaining_amount IS NOT NULL AND entry_price IS NOT NULL
+              THEN (remaining_amount * entry_price)
+              ELSE (entry_amount * entry_price)
+            END
+          ), 0) as total_exposure
+        FROM positions
+        WHERE status = 'OPEN'
+      `);
+
+      const openPositions = parseInt(positionsResult.rows[0]?.count || '0');
+
+      // Get wallet balance to calculate exposure percentage
+      // For now, use a reasonable estimate based on position sizes
+      // In production, this should query actual wallet balance
+      const totalExposureUSD = parseFloat(positionsResult.rows[0]?.total_exposure || '0');
+
+      // Estimate total exposure as percentage (assuming ~$1000 per % point as baseline)
+      // This will be refined once we track actual wallet balance
+      const estimatedWalletValue = 10000; // Default estimate, should be from wallet
+      const totalExposurePercent = estimatedWalletValue > 0
+        ? (totalExposureUSD / estimatedWalletValue) * 100
+        : openPositions * 3; // Fallback to estimate
+
+      // Update local state
+      this.openPositions = openPositions;
+      this.dailyPnL = dailyPnL;
 
       return {
-        dailyPnL: 0, // 0% today
-        dailyLossLimit: -8, // -8% max loss
-        dailyProfitLimit: 15, // +15% max profit
-        openPositions: this.openPositions,
-        maxOpenPositions: 5, // Max 5 positions
-        totalExposurePercent: this.openPositions * 3, // STUB: Assume 3% avg per position
-        maxTotalExposure: 20 // Max 20% total exposure
+        dailyPnL,
+        dailyLossLimit: -8, // -8% max loss per CLAUDE.md
+        dailyProfitLimit: 15, // +15% max profit per CLAUDE.md
+        openPositions,
+        maxOpenPositions: 5, // Max 5 positions per CLAUDE.md
+        totalExposurePercent: Math.min(totalExposurePercent, 100),
+        maxTotalExposure: 20 // Max 20% total exposure per CLAUDE.md
       };
 
     } catch (error: any) {
       logger.error('Error getting portfolio limits', { error: error.message });
-      throw error;
+      // Return safe defaults on error
+      return {
+        dailyPnL: this.dailyPnL,
+        dailyLossLimit: -8,
+        dailyProfitLimit: 15,
+        openPositions: this.openPositions,
+        maxOpenPositions: 5,
+        totalExposurePercent: this.openPositions * 3,
+        maxTotalExposure: 20
+      };
     }
   }
 
@@ -440,25 +493,97 @@ export class EntryDecisionEngine {
   }
 
   /**
-   * Load state from database
+   * Load state from database on startup
    */
   private async loadStateFromDB(): Promise<void> {
     try {
-      // STUB: Load from database
-      // For now, start fresh
-      logger.info('Entry Decision Engine state loaded (STUB)');
+      // Calculate daily P&L from trades closed today
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const dailyTradesResult = await query<{ total_pnl: string }>(`
+        SELECT COALESCE(SUM(profit_loss_percent), 0) as total_pnl
+        FROM trades
+        WHERE exit_time >= $1
+        AND exit_time IS NOT NULL
+      `, [todayStart.toISOString()]);
+
+      this.dailyPnL = parseFloat(dailyTradesResult.rows[0]?.total_pnl || '0');
+
+      // Count open positions
+      const positionsResult = await query<{ count: string }>(`
+        SELECT COUNT(*) as count FROM positions WHERE status = 'OPEN'
+      `);
+      this.openPositions = parseInt(positionsResult.rows[0]?.count || '0');
+
+      // Calculate losing streak from recent trades
+      const recentTradesResult = await query<{ outcome: string }>(`
+        SELECT outcome FROM trades
+        WHERE exit_time IS NOT NULL
+        ORDER BY exit_time DESC
+        LIMIT 10
+      `);
+
+      // Count consecutive losses from most recent
+      this.losingStreak = 0;
+      for (const trade of recentTradesResult.rows) {
+        if (trade.outcome === 'LOSS' || trade.outcome === 'EMERGENCY' || trade.outcome === 'RUG') {
+          this.losingStreak++;
+        } else {
+          break; // Stop at first non-loss
+        }
+      }
+
+      // Load cooldown state from cache
+      const cooldownResult = await query<{ value: string }>(`
+        SELECT value FROM cache WHERE key = 'entry_decision_cooldown'
+      `);
+
+      if (cooldownResult.rows.length > 0) {
+        const cooldownData = JSON.parse(cooldownResult.rows[0].value);
+        this.cooldownUntil = cooldownData.cooldownUntil || 0;
+      }
+
+      logger.info('Entry Decision Engine state loaded from database', {
+        dailyPnL: this.dailyPnL.toFixed(2) + '%',
+        openPositions: this.openPositions,
+        losingStreak: this.losingStreak,
+        cooldownActive: Date.now() < this.cooldownUntil
+      });
+
     } catch (error: any) {
       logger.error('Error loading entry decision state', { error: error.message });
+      // Start with defaults on error
+      this.dailyPnL = 0;
+      this.openPositions = 0;
+      this.losingStreak = 0;
+      this.cooldownUntil = 0;
     }
   }
 
   /**
-   * Save state to database
+   * Save state to database (cooldown and streak info)
    */
   private async saveStateToDB(): Promise<void> {
     try {
-      // STUB: Save to database
-      logger.debug('Entry Decision Engine state saved (STUB)');
+      const stateData = JSON.stringify({
+        cooldownUntil: this.cooldownUntil,
+        losingStreak: this.losingStreak,
+        lastTradeTimestamp: this.lastTradeTimestamp,
+        updatedAt: new Date().toISOString()
+      });
+
+      // Upsert cooldown state to cache
+      await query(`
+        INSERT INTO cache (key, value, expires_at)
+        VALUES ('entry_decision_cooldown', $1, NOW() + INTERVAL '24 hours')
+        ON CONFLICT (key) DO UPDATE SET
+          value = EXCLUDED.value,
+          expires_at = EXCLUDED.expires_at
+      `, [stateData]);
+
+      logger.debug('Entry Decision Engine state saved to database');
+
     } catch (error: any) {
       logger.error('Error saving entry decision state', { error: error.message });
     }

@@ -191,13 +191,13 @@ export class SolanaRPCManager {
    * Start periodic health checks
    */
   private startHealthChecks(): void {
-    // Check every 30 seconds
+    // Check every 60 seconds (reduced from 30s to save rate limit quota)
     this.healthCheckInterval = setInterval(() => {
       this.performHealthChecks();
-    }, 30000);
+    }, 60000);
 
-    // Perform initial check
-    this.performHealthChecks();
+    // Perform initial check after a short delay to let main operations start first
+    setTimeout(() => this.performHealthChecks(), 5000);
   }
 
   /**

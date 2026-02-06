@@ -84,11 +84,21 @@ export class ContractAnalyzer {
         5 // medium priority
       );
 
-      if (!accountInfo) return false;
+      if (!accountInfo) {
+        logger.debug(`No account info found for ${tokenAddress.slice(0, 8)}...`);
+        return false;
+      }
 
       // Check if owned by pump.fun program
-      return accountInfo.owner.equals(this.PUMP_FUN_PROGRAM);
-    } catch {
+      const isPumpFun = accountInfo.owner.equals(this.PUMP_FUN_PROGRAM);
+      if (isPumpFun) {
+        logger.debug(`Token ${tokenAddress.slice(0, 8)}... confirmed as pump.fun by RPC check`);
+      }
+      return isPumpFun;
+    } catch (error: unknown) {
+      // Log the error instead of silently failing
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.warn(`RPC check for pump.fun token failed: ${errorMsg} - will use pattern matching`);
       return false;
     }
   }
@@ -153,19 +163,40 @@ export class ContractAnalyzer {
     logger.info(`🔍 Analyzing contract ${tokenAddress.slice(0, 8)}...`);
 
     try {
+      // CRITICAL FIX: Pattern-based pump.fun detection FIRST
+      // Pump.fun tokens always end with "pump" in their address
+      // This check is instant and doesn't require RPC calls
+      if (tokenAddress.toLowerCase().endsWith('pump')) {
+        logger.info(`🎯 Detected pump.fun token by address pattern: ${tokenAddress.slice(0, 8)}...`);
+        return this.analyzePumpFunToken(tokenAddress);
+      }
+
       const tokenPubkey = new PublicKey(tokenAddress);
 
-      // Step 0: Check if this is a pump.fun bonding curve token
+      // Fallback: RPC-based pump.fun check for edge cases
       const isPumpFun = await this.isPumpFunToken(tokenAddress);
       if (isPumpFun) {
         return this.analyzePumpFunToken(tokenAddress);
       }
 
       // Step 1: Get mint account info (standard SPL token)
-      const mintInfo = await rateLimitedRPC(
-        () => getMint(this.connection, tokenPubkey),
-        6 // higher priority for main analysis
-      );
+      // Wrap in try-catch to handle non-SPL tokens gracefully
+      let mintInfo;
+      try {
+        mintInfo = await rateLimitedRPC(
+          () => getMint(this.connection, tokenPubkey),
+          6 // higher priority for main analysis
+        );
+      } catch (mintError: unknown) {
+        // If getMint fails, this might be a non-standard token
+        // Try analyzing as pump.fun token as fallback
+        const errorMsg = mintError instanceof Error ? mintError.message : String(mintError);
+        if (errorMsg.includes('TokenInvalidAccountOwner') || errorMsg.includes('AccountNotFound')) {
+          logger.warn(`Token ${tokenAddress.slice(0, 8)}... is not a standard SPL token, trying pump.fun analysis`);
+          return this.analyzePumpFunToken(tokenAddress);
+        }
+        throw mintError;
+      }
 
       // Step 2: Check authorities
       const hasMintAuthority = mintInfo.mintAuthority !== null;
@@ -794,20 +825,37 @@ export class ContractAnalyzer {
    */
   async quickSafetyCheck(tokenAddress: string): Promise<boolean> {
     try {
-      // Check if this is a pump.fun token first
+      // CRITICAL FIX: Pattern-based pump.fun detection FIRST
+      // This avoids RPC calls that might fail due to rate limiting
+      if (tokenAddress.toLowerCase().endsWith('pump')) {
+        logger.debug(`Token ${tokenAddress.slice(0, 8)}... is pump.fun token (pattern match) - passes quick check`);
+        return true;
+      }
+
+      // Fallback: RPC-based pump.fun check
       const isPumpFun = await this.isPumpFunToken(tokenAddress);
       if (isPumpFun) {
-        // Pump.fun tokens pass quick check - full analysis will score them properly
         logger.debug(`Token ${tokenAddress.slice(0, 8)}... is pump.fun bonding curve token`);
         return true;
       }
 
       // Standard SPL token check
       const tokenPubkey = new PublicKey(tokenAddress);
-      const mintInfo = await rateLimitedRPC(
-        () => getMint(this.connection, tokenPubkey),
-        6
-      );
+      let mintInfo;
+      try {
+        mintInfo = await rateLimitedRPC(
+          () => getMint(this.connection, tokenPubkey),
+          6
+        );
+      } catch (mintError: unknown) {
+        // If getMint fails with TokenInvalidAccountOwner, might be a non-standard token
+        const errorMsg = mintError instanceof Error ? mintError.message : String(mintError);
+        if (errorMsg.includes('TokenInvalidAccountOwner')) {
+          logger.debug(`Token ${tokenAddress.slice(0, 8)}... is non-standard token - allowing for further analysis`);
+          return true; // Allow further analysis to determine if it's safe
+        }
+        throw mintError;
+      }
 
       // Hard reject: Has mint authority
       if (mintInfo.mintAuthority !== null) {

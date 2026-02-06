@@ -473,8 +473,8 @@ export class SignalTracker {
           tier1_count, tier2_count, tier3_count,
           current_price, liquidity_usd, holder_count,
           safety_score, safety_checks, is_honeypot, has_mint_authority, has_freeze_authority,
-          conviction_score, status, rejection_reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          conviction_score, status, rejection_reason, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW() + INTERVAL '2 hours')
         ON CONFLICT (token_address) DO UPDATE SET
           smart_wallets_entered = EXCLUDED.smart_wallets_entered,
           smart_wallet_count = EXCLUDED.smart_wallet_count,
@@ -490,6 +490,7 @@ export class SignalTracker {
           conviction_score = EXCLUDED.conviction_score,
           status = CASE WHEN token_opportunities.status = 'ANALYZING' THEN EXCLUDED.status ELSE token_opportunities.status END,
           rejection_reason = CASE WHEN token_opportunities.status = 'ANALYZING' THEN EXCLUDED.rejection_reason ELSE token_opportunities.rejection_reason END,
+          expires_at = GREATEST(token_opportunities.expires_at, NOW() + INTERVAL '2 hours'),
           last_updated = NOW()
       `, [
         tokenAddress,
@@ -923,8 +924,8 @@ export class SignalTracker {
                conviction_score, safety_score
         FROM token_opportunities
         WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
-        AND expires_at > NOW()
-        AND liquidity_usd >= 5000
+        AND (expires_at > NOW() OR expires_at IS NULL)
+        AND (liquidity_usd >= 5000 OR liquidity_usd IS NULL)
         AND is_honeypot = false
         AND (has_mint_authority = false OR has_mint_authority IS NULL)
         AND (
@@ -1255,7 +1256,7 @@ export class SignalTracker {
          FROM token_opportunities
          WHERE safety_score = 0
          AND status = 'ANALYZING'
-         AND expires_at > NOW()
+         AND (expires_at > NOW() OR expires_at IS NULL)
          ORDER BY discovered_at DESC
          LIMIT 10`
       );

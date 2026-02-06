@@ -2,15 +2,15 @@
  * Price Feed System
  *
  * Provides real-time token price data:
- * - Fetches prices from Raydium, Jupiter, and other DEXs
- * - Caches prices in Redis with TTL
+ * - Fetches prices from multiple sources with fallbacks
+ * - Caches prices in memory with TTL
  * - Tracks price history for pattern detection
  * - Calculates dip depth, ATH distance, volume
  *
  * Price sources (in order of preference):
  * 1. Jupiter Aggregator API (best liquidity aggregation)
- * 2. Raydium SDK (direct pool queries)
- * 3. On-chain pool state parsing (fallback)
+ * 2. DexScreener API (FREE, no API key needed - reliable fallback)
+ * 3. Birdeye API (requires API key - optional)
  */
 
 import { Connection } from '@solana/web3.js';
@@ -275,40 +275,81 @@ export class PriceFeed {
   }
 
   /**
-   * Fetch price from Raydium
-   * STUB: Full implementation requires Raydium SDK integration
+   * Fetch price from DexScreener (FREE, no API key needed)
+   * This is a reliable fallback when Jupiter fails
    */
-  private async fetchFromRaydium(_tokenAddress: string): Promise<TokenPrice | null> {
+  private async fetchFromRaydium(tokenAddress: string): Promise<TokenPrice | null> {
     try {
-      // STUB: In production, use Raydium SDK to query pool state
-      // Example:
-      // const poolKeys = await getRaydiumPoolKeys(tokenAddress);
-      // const poolInfo = await getPoolInfo(poolKeys);
-      // Calculate price from reserves
+      const response = await axios.get(
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`,
+        { timeout: 5000 }
+      );
 
-      logger.debug('Raydium price fetch (STUB)');
-      return null;
+      const pairs = response.data?.pairs || [];
+
+      // Find the main SOL pair (most liquid)
+      const mainPair = pairs.find((p: any) =>
+        p.chainId === 'solana' && p.quoteToken?.symbol === 'SOL'
+      ) || pairs[0];
+
+      if (!mainPair) {
+        logger.debug(`No DexScreener pairs found for ${tokenAddress.slice(0, 8)}...`);
+        return null;
+      }
+
+      return {
+        tokenAddress,
+        priceUSD: parseFloat(mainPair.priceUsd) || 0,
+        priceSOL: parseFloat(mainPair.priceNative) || 0,
+        volume24h: parseFloat(mainPair.volume?.h24) || 0,
+        priceChange24h: parseFloat(mainPair.priceChange?.h24) || 0,
+        liquidityUSD: parseFloat(mainPair.liquidity?.usd) || 0,
+        timestamp: Date.now()
+      };
 
     } catch (error: any) {
-      logger.debug('Raydium price fetch failed', { error: error.message });
+      logger.debug('DexScreener price fetch failed', { error: error.message });
       return null;
     }
   }
 
   /**
-   * Fetch price from on-chain pool state
-   * STUB: Requires pool parsing logic
+   * Fetch price from Birdeye API (requires API key)
+   * Only used if BIRDEYE_API_KEY is configured
    */
-  private async fetchOnChain(_tokenAddress: string): Promise<TokenPrice | null> {
+  private async fetchOnChain(tokenAddress: string): Promise<TokenPrice | null> {
     try {
-      // STUB: Parse pool account data directly
-      // This is the most reliable but slowest method
+      const apiKey = process.env.BIRDEYE_API_KEY;
+      if (!apiKey) {
+        logger.debug('Birdeye API key not configured, skipping');
+        return null;
+      }
 
-      logger.debug('On-chain price fetch (STUB)');
-      return null;
+      const response = await axios.get(
+        `https://public-api.birdeye.so/defi/price?address=${tokenAddress}`,
+        {
+          headers: { 'X-API-KEY': apiKey },
+          timeout: 5000
+        }
+      );
+
+      const data = response.data?.data;
+      if (!data) {
+        return null;
+      }
+
+      return {
+        tokenAddress,
+        priceUSD: data.value || 0,
+        priceSOL: 0,
+        volume24h: 0,
+        priceChange24h: data.priceChange24h || 0,
+        liquidityUSD: data.liquidity || 0,
+        timestamp: Date.now()
+      };
 
     } catch (error: any) {
-      logger.debug('On-chain price fetch failed', { error: error.message });
+      logger.debug('Birdeye price fetch failed', { error: error.message });
       return null;
     }
   }

@@ -1,5 +1,5 @@
 import { Pool, PoolClient, QueryResult } from 'pg';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../utils/logger';
 
@@ -139,61 +139,92 @@ export async function transaction<T>(
 }
 
 /**
- * Initialize database schema
+ * Initialize database schema and run all migrations
  */
 export async function initializeSchema(): Promise<void> {
   try {
-    // First, run the fix script to ensure all tables exist with IF NOT EXISTS
+    // Step 1: Run fix script for critical tables
     const fixScriptPath = join(__dirname, '../../database/fix_missing_tables.sql');
     try {
       const fixScript = readFileSync(fixScriptPath, 'utf-8');
       await query(fixScript);
-      logger.info('Database schema fix applied successfully');
+      logger.info('Database fix script applied');
     } catch (error: any) {
-      // Fix script might not exist or have errors, continue anyway
-      logger.debug('Fix script not applied', { error: error.message });
+      logger.debug('Fix script skipped', { error: error.message });
     }
 
-    // Check if core tables exist
+    // Step 2: Check if core tables exist, if not run base schema
     const tableCheck = await query(`
       SELECT EXISTS (
-        SELECT FROM information_schema.tables
-        WHERE table_schema = 'public'
-        AND table_name = 'cache'
-      ) as cache_exists,
-      EXISTS (
         SELECT FROM information_schema.tables
         WHERE table_schema = 'public'
         AND table_name = 'smart_wallets'
       ) as smart_wallets_exists
     `);
 
-    const { cache_exists, smart_wallets_exists } = tableCheck.rows[0];
-
-    // If core tables exist, we're good
-    if (cache_exists && smart_wallets_exists) {
-      logger.info('Database schema already exists');
-      return;
-    }
-
-    // If not, try to run the main schema
-    const schemaPath = join(__dirname, '../../database/schema.sql');
-    const schema = readFileSync(schemaPath, 'utf-8');
-
-    logger.info('Loading database schema...');
-
-    try {
-      await query(schema);
-      logger.info('Database schema initialized successfully');
-    } catch (error: any) {
-      // If tables already exist, that's fine
-      if (error.message.includes('already exists')) {
-        logger.info('Database schema already exists');
-      } else {
-        logger.error('Failed to initialize database schema', { error: error.message });
-        throw error;
+    if (!tableCheck.rows[0].smart_wallets_exists) {
+      const schemaPath = join(__dirname, '../../database/schema.sql');
+      try {
+        const schema = readFileSync(schemaPath, 'utf-8');
+        await query(schema);
+        logger.info('Base schema initialized');
+      } catch (error: any) {
+        if (!error.message.includes('already exists')) {
+          throw error;
+        }
       }
     }
+
+    // Step 3: Run ALL migrations from database/migrations/ directory
+    const migrationsDir = join(__dirname, '../../database/migrations');
+    if (existsSync(migrationsDir)) {
+      const migrationFiles = readdirSync(migrationsDir)
+        .filter(file => file.endsWith('.sql'))
+        .sort(); // Sort alphabetically to run in order (001, 002, 003, etc.)
+
+      logger.info(`Found ${migrationFiles.length} migration files`);
+
+      for (const file of migrationFiles) {
+        const migrationPath = join(migrationsDir, file);
+        try {
+          const migrationSql = readFileSync(migrationPath, 'utf-8');
+          await query(migrationSql);
+          logger.info(`Migration applied: ${file}`);
+        } catch (error: any) {
+          // Handle common idempotent errors gracefully
+          if (error.message.includes('already exists') ||
+              error.message.includes('duplicate key') ||
+              error.message.includes('does not exist') ||
+              error.message.includes('cannot drop')) {
+            logger.debug(`Migration ${file} skipped (already applied or no changes needed)`);
+          } else {
+            logger.warn(`Migration ${file} had issues`, { error: error.message });
+          }
+        }
+      }
+    }
+
+    // Step 4: Run standalone schema files (schema_update.sql, schema_learning.sql)
+    const standaloneSchemas = ['schema_update.sql', 'schema_learning.sql'];
+    for (const schemaFile of standaloneSchemas) {
+      const schemaPath = join(__dirname, '../../database', schemaFile);
+      if (existsSync(schemaPath)) {
+        try {
+          const schemaSql = readFileSync(schemaPath, 'utf-8');
+          await query(schemaSql);
+          logger.info(`Schema applied: ${schemaFile}`);
+        } catch (error: any) {
+          if (error.message.includes('already exists') ||
+              error.message.includes('duplicate key')) {
+            logger.debug(`Schema ${schemaFile} skipped (already applied)`);
+          } else {
+            logger.warn(`Schema ${schemaFile} had issues`, { error: error.message });
+          }
+        }
+      }
+    }
+
+    logger.info('Database schema and migrations ready');
   } catch (error: any) {
     logger.error('Failed to initialize database schema', { error: error.message });
     throw error;
