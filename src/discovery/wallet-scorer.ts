@@ -451,6 +451,17 @@ export class WalletScorer {
   private async saveWalletsToDatabase(wallets: SmartWallet[]): Promise<void> {
     try {
       for (const wallet of wallets) {
+        // Ensure all numeric values are properly formatted
+        // Some columns may be INTEGER in the database, so we round appropriately
+        const tier = Math.round(wallet.tier);
+        const score = Math.round(wallet.score * 100) / 100; // 2 decimal places
+        const winRate = Math.round(wallet.winRate * 100) / 100; // 2 decimal places
+        const averageReturn = Math.round(wallet.averageReturn * 100) / 100; // 2 decimal places, capped
+        const tokensEntered = Math.round(wallet.tokensEntered);
+        const totalTrades = Math.round(wallet.metrics.totalTrades);
+        const successfulTrades = Math.round(wallet.metrics.successfulTrades);
+        const averageHoldTime = Math.round(wallet.metrics.averageHoldTime || 0);
+
         await query(`
           INSERT INTO smart_wallets (
             id, address, tier, score, win_rate, average_return,
@@ -471,15 +482,15 @@ export class WalletScorer {
         `, [
           randomUUID(),
           wallet.address,
-          Math.round(wallet.tier),
-          Math.round(wallet.score),
-          wallet.winRate,
-          wallet.averageReturn,
-          Math.round(wallet.tokensEntered),
+          tier,
+          score,
+          winRate,
+          averageReturn,
+          tokensEntered,
           wallet.lastActive,
-          Math.round(wallet.metrics.totalTrades),
-          Math.round(wallet.metrics.successfulTrades),
-          Math.round(wallet.metrics.averageHoldTime || 0)
+          totalTrades,
+          successfulTrades,
+          averageHoldTime
         ]);
       }
 
