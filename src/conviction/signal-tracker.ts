@@ -89,6 +89,16 @@ export class SignalTracker {
     logger.info('📡 Starting Signal Tracker...');
     this.isRunning = true;
 
+    // Load existing active opportunities from database on startup
+    this.loadActiveOpportunitiesFromDB().catch(error => {
+      logger.error('Error loading opportunities from DB', { error: error.message });
+    });
+
+    // Clean up dead/expired tokens immediately
+    this.cleanupDeadTokens().catch(error => {
+      logger.error('Error cleaning up dead tokens', { error: error.message });
+    });
+
     // Monitor for new opportunities every 30 seconds
     this.monitorInterval = setInterval(() => {
       this.scanForOpportunities().catch(error => {
@@ -109,6 +119,13 @@ export class SignalTracker {
         logger.error('Error re-analyzing zero score tokens', { error: error.message });
       });
     }, 120000);
+
+    // Clean up dead tokens every 2 minutes
+    setInterval(() => {
+      this.cleanupDeadTokens().catch(error => {
+        logger.error('Error cleaning up dead tokens', { error: error.message });
+      });
+    }, 2 * 60 * 1000);
 
     // Also run initial re-analysis
     this.reanalyzeZeroScoreTokens().catch(error => {
@@ -390,14 +407,31 @@ export class SignalTracker {
         }
 
         // Try to get full signal aggregation for conviction score
+        // Pass the known wallet data so it uses REAL wallet info
         try {
+          const knownWalletData = {
+            walletAddresses: data.walletAddresses,
+            walletTiers: data.walletTiers,
+            firstDetected: data.firstSeen
+          };
+
           const aggregatedSignal = await this.signalAggregator.aggregateSignals(
             tokenAddress,
             tokenInfo.name,
-            tokenInfo.symbol
+            tokenInfo.symbol,
+            knownWalletData,
+            priceData?.priceUSD || undefined // Use current price as starting high
           );
           const conviction = await this.convictionScorer.calculateConviction(aggregatedSignal);
           convictionScore = conviction.totalScore || 0;
+
+          logger.info(`Conviction score calculated: ${convictionScore.toFixed(1)} (${conviction.convictionLevel})`, {
+            tier1: tier1Count,
+            tier2: tier2Count,
+            tier3: tier3Count,
+            safetyScore,
+            shouldEnter: conviction.shouldEnter
+          });
         } catch (aggError: any) {
           // Use safety score as base conviction if aggregation fails
           convictionScore = safetyScore * 0.25; // Safety is 25% of conviction
@@ -512,16 +546,78 @@ export class SignalTracker {
         const dipDepth = ((opportunity.highestPrice - priceData.priceUSD) / opportunity.highestPrice) * 100;
         opportunity.dipDepthPercent = dipDepth;
 
+        // Calculate token age in minutes
+        const tokenAgeMinutes = (Date.now() - opportunity.firstDetected) / 60000;
+
+        // ============================================================
+        // REAL-TIME QUALITY CHECKS - Remove tokens that became unviable
+        // ============================================================
+
+        // Check 1: Liquidity dropped below minimum
+        if (priceData.liquidityUSD !== undefined && priceData.liquidityUSD < 5000) {
+          logger.info(`💀 ${tokenAddress.slice(0, 8)}... liquidity dropped to $${priceData.liquidityUSD.toFixed(0)} - removing`);
+          opportunity.status = 'EXPIRED';
+          await this.updateOpportunityStatus(tokenAddress, 'DEAD');
+          this.trackedOpportunities.delete(tokenAddress);
+          continue;
+        }
+
+        // Check 2: Price collapsed > 80% (faster than cleanup interval)
+        if (opportunity.highestPrice > 0 && priceData.priceUSD > 0) {
+          const priceRatio = priceData.priceUSD / opportunity.highestPrice;
+          if (priceRatio < 0.2) {
+            logger.info(`💀 ${tokenAddress.slice(0, 8)}... price collapsed ${((1 - priceRatio) * 100).toFixed(0)}% - removing`);
+            opportunity.status = 'EXPIRED';
+            await this.updateOpportunityStatus(tokenAddress, 'DEAD');
+            this.trackedOpportunities.delete(tokenAddress);
+            continue;
+          }
+        }
+
+        // Check 3: No smart wallet interest after 30 minutes
+        if (opportunity.smartWalletsEntered.length === 0 && tokenAgeMinutes > 30) {
+          logger.info(`💀 ${tokenAddress.slice(0, 8)}... no smart wallet interest after 30 min - removing`);
+          opportunity.status = 'EXPIRED';
+          await this.updateOpportunityStatus(tokenAddress, 'DEAD');
+          this.trackedOpportunities.delete(tokenAddress);
+          continue;
+        }
+
         // Update database with current market data
         await this.updateOpportunityMarketData(tokenAddress, priceData, dipDepth, opportunity.highestPrice);
 
-        // Check if dip entry conditions are met
-        if (dipDepth >= 20 && dipDepth <= 35 && opportunity.status === 'WATCHING') {
-          logger.info(`🎯 Entry opportunity detected: ${tokenAddress.slice(0, 8)}... (${dipDepth.toFixed(1)}% dip)`);
-          opportunity.status = 'READY';
+        // Count Tier 1 wallets
+        const tier1Count = opportunity.smartWalletTiers.filter(t => t === 1).length;
+        const tier2Count = opportunity.smartWalletTiers.filter(t => t === 2).length;
 
-          // Trigger entry evaluation
-          await this.evaluateEntry(opportunity);
+        // ENTRY TRIGGER 1: Early Discovery (per CLAUDE.md Category 5)
+        // If 2+ Tier 1 wallets buy within first 10 minutes AND safety passes → Enter without dip
+        if (opportunity.status === 'WATCHING' && tokenAgeMinutes <= 10 && tier1Count >= 2) {
+          logger.info(`🚀 EARLY DISCOVERY: ${tokenAddress.slice(0, 8)}... (${tier1Count} Tier 1 wallets, ${tokenAgeMinutes.toFixed(1)} min old)`);
+          opportunity.status = 'READY';
+          await this.evaluateEntry(opportunity, true); // true = isEarlyDiscovery
+          continue;
+        }
+
+        // ENTRY TRIGGER 2: Primary Entry (3+ Tier 1/2 wallets + 20-30% dip)
+        if (opportunity.status === 'WATCHING' && dipDepth >= 20 && dipDepth <= 35) {
+          if (tier1Count >= 3 || (tier1Count + tier2Count) >= 3) {
+            logger.info(`🎯 PRIMARY ENTRY: ${tokenAddress.slice(0, 8)}... (${dipDepth.toFixed(1)}% dip, ${tier1Count}T1/${tier2Count}T2)`);
+            opportunity.status = 'READY';
+            await this.evaluateEntry(opportunity);
+            continue;
+          }
+        }
+
+        // ENTRY TRIGGER 3: Secondary Entry (1-2 Tier 1 + dip + high safety score)
+        // This will be evaluated by the conviction scorer based on safety score threshold
+        if (opportunity.status === 'WATCHING' && dipDepth >= 20 && dipDepth <= 35) {
+          if (tier1Count >= 1 || tier2Count >= 2) {
+            logger.info(`🎯 SECONDARY ENTRY: ${tokenAddress.slice(0, 8)}... (${dipDepth.toFixed(1)}% dip, ${tier1Count}T1/${tier2Count}T2)`);
+            opportunity.status = 'READY';
+            await this.evaluateEntry(opportunity);
+            continue;
+          }
         }
       }
 
@@ -587,16 +683,42 @@ export class SignalTracker {
 
   /**
    * Evaluate if we should enter a ready opportunity
+   *
+   * @param opportunity - The tracked opportunity to evaluate
+   * @param isEarlyDiscovery - If true, this is an early discovery entry (doesn't require dip)
    */
-  private async evaluateEntry(opportunity: TrackedOpportunity): Promise<void> {
+  private async evaluateEntry(opportunity: TrackedOpportunity, isEarlyDiscovery: boolean = false): Promise<void> {
     try {
-      logger.info(`🔍 Evaluating entry for ${opportunity.tokenAddress.slice(0, 8)}...`);
+      const entryType = isEarlyDiscovery ? '🚀 EARLY DISCOVERY' : '🎯 STANDARD';
+      logger.info(`${entryType} - Evaluating entry for ${opportunity.tokenAddress.slice(0, 8)}...`);
 
-      // Step 1: Aggregate all signals
+      // Prepare known wallet data from the tracked opportunity
+      // This ensures the signal aggregator uses REAL wallet data we've already collected
+      const knownWalletData = {
+        walletAddresses: opportunity.smartWalletsEntered,
+        walletTiers: opportunity.smartWalletTiers,
+        firstDetected: opportunity.firstDetected
+      };
+
+      const tier1Count = knownWalletData.walletTiers.filter(t => t === 1).length;
+      const tier2Count = knownWalletData.walletTiers.filter(t => t === 2).length;
+      const tier3Count = knownWalletData.walletTiers.filter(t => t === 3).length;
+
+      logger.info(`📊 Passing ${knownWalletData.walletAddresses.length} tracked wallets to signal aggregator`, {
+        tier1: tier1Count,
+        tier2: tier2Count,
+        tier3: tier3Count,
+        highestPrice: opportunity.highestPrice,
+        isEarlyDiscovery
+      });
+
+      // Step 1: Aggregate all signals (pass wallet data and known high price for accurate dip calc)
       const aggregatedSignal = await this.signalAggregator.aggregateSignals(
         opportunity.tokenAddress,
         opportunity.tokenName,
-        opportunity.tokenSymbol
+        opportunity.tokenSymbol,
+        knownWalletData,
+        opportunity.highestPrice
       );
 
       // Step 2: Calculate conviction score
@@ -757,14 +879,326 @@ export class SignalTracker {
   }
 
   /**
+   * Load active opportunities from database on startup
+   * This ensures we don't lose track of opportunities between restarts
+   */
+  private async loadActiveOpportunitiesFromDB(): Promise<void> {
+    try {
+      logger.info('📂 Loading HIGH-QUALITY opportunities from database...');
+
+      // STRICTER FILTERS - Only load tokens with real potential
+      const result = await query<{
+        token_address: string;
+        token_name: string;
+        token_symbol: string;
+        smart_wallets_entered: string[];
+        tier1_count: number;
+        tier2_count: number;
+        tier3_count: number;
+        discovered_at: Date;
+        current_price: number;
+        ath_price: number;
+        dip_from_high: number;
+        status: string;
+        conviction_score: number;
+        safety_score: number;
+      }>(`
+        SELECT token_address, token_name, token_symbol,
+               smart_wallets_entered, tier1_count, tier2_count, tier3_count,
+               discovered_at, current_price, ath_price, dip_from_high, status,
+               conviction_score, safety_score
+        FROM token_opportunities
+        WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+        AND expires_at > NOW()
+        AND liquidity_usd >= 5000
+        AND is_honeypot = false
+        AND (has_mint_authority = false OR has_mint_authority IS NULL)
+        AND (
+          -- Must have good safety score OR be very new
+          (safety_score >= 40) OR (discovered_at > NOW() - INTERVAL '30 minutes')
+        )
+        AND (
+          -- Must have decent conviction OR be very new
+          (conviction_score >= 30) OR (discovered_at > NOW() - INTERVAL '30 minutes')
+        )
+        AND (
+          -- Must have smart wallet interest OR be very new
+          (smart_wallet_count > 0) OR (discovered_at > NOW() - INTERVAL '30 minutes')
+        )
+        ORDER BY conviction_score DESC NULLS LAST
+        LIMIT 30
+      `);
+
+      if (result.rows.length === 0) {
+        logger.info('No active opportunities found in database');
+        return;
+      }
+
+      let loaded = 0;
+      for (const row of result.rows) {
+        // Skip if already tracking
+        if (this.trackedOpportunities.has(row.token_address)) {
+          continue;
+        }
+
+        // Reconstruct wallet tiers
+        const walletTiers = [
+          ...Array(row.tier1_count || 0).fill(1),
+          ...Array(row.tier2_count || 0).fill(2),
+          ...Array(row.tier3_count || 0).fill(3)
+        ];
+
+        const opportunity: TrackedOpportunity = {
+          tokenAddress: row.token_address,
+          tokenName: row.token_name || 'Unknown',
+          tokenSymbol: row.token_symbol || '???',
+          firstDetected: row.discovered_at ? new Date(row.discovered_at).getTime() : Date.now(),
+          smartWalletsEntered: row.smart_wallets_entered || [],
+          smartWalletTiers: walletTiers,
+          currentPrice: row.current_price || 0,
+          highestPrice: row.ath_price || row.current_price || 0,
+          dipDepthPercent: row.dip_from_high || 0,
+          status: 'WATCHING',
+          expiresAt: Date.now() + 2 * 60 * 60 * 1000 // 2 hours from now
+        };
+
+        this.trackedOpportunities.set(row.token_address, opportunity);
+        loaded++;
+      }
+
+      logger.info(`✅ Loaded ${loaded} active opportunities from database`, {
+        total: result.rows.length,
+        newlyLoaded: loaded
+      });
+
+    } catch (error: any) {
+      logger.error('Error loading opportunities from DB', { error: error.message });
+    }
+  }
+
+  /**
+   * AGGRESSIVE Token Cleanup - Focus on Quality
+   *
+   * Removes tokens that don't have real potential:
+   * - Low liquidity (< $5K)
+   * - Low safety score (< 40)
+   * - Low conviction score (< 30 after 1 hour)
+   * - No smart wallet interest (after 30 min)
+   * - Stale data (> 2 hours without update)
+   * - No trading volume (< $1K after 1 hour)
+   * - Price collapsed (> 90% from ATH)
+   * - Rejected tokens (after 4 hours)
+   * - Old entries (> 7 days)
+   */
+  private async cleanupDeadTokens(): Promise<void> {
+    try {
+      logger.info('🧹 Running AGGRESSIVE token cleanup...');
+
+      // 1. Mark tokens with LOW LIQUIDITY as DEAD (threshold raised to $5K)
+      const deadLiquidity = await query(`
+        UPDATE token_opportunities
+        SET status = 'DEAD', rejection_reason = 'Low liquidity (<$5K)'
+        WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+        AND (liquidity_usd IS NULL OR liquidity_usd < 5000)
+        AND discovered_at < NOW() - INTERVAL '30 minutes'
+      `);
+
+      // 2. Mark tokens with LOW SAFETY SCORE as DEAD
+      const deadSafety = await query(`
+        UPDATE token_opportunities
+        SET status = 'DEAD', rejection_reason = 'Low safety score (<40)'
+        WHERE status IN ('ANALYZING', 'WATCHING')
+        AND safety_score IS NOT NULL
+        AND safety_score < 40
+        AND discovered_at < NOW() - INTERVAL '30 minutes'
+      `);
+
+      // 3. Mark tokens with LOW CONVICTION SCORE as DEAD (after 1 hour to analyze)
+      const deadConviction = await query(`
+        UPDATE token_opportunities
+        SET status = 'DEAD', rejection_reason = 'Low conviction score (<30)'
+        WHERE status IN ('ANALYZING', 'WATCHING')
+        AND conviction_score IS NOT NULL
+        AND conviction_score < 30
+        AND discovered_at < NOW() - INTERVAL '1 hour'
+      `);
+
+      // 4. Mark tokens with NO SMART WALLET INTEREST as DEAD
+      const deadNoWallets = await query(`
+        UPDATE token_opportunities
+        SET status = 'DEAD', rejection_reason = 'No smart wallet interest'
+        WHERE status IN ('ANALYZING', 'WATCHING')
+        AND (smart_wallet_count IS NULL OR smart_wallet_count = 0)
+        AND discovered_at < NOW() - INTERVAL '30 minutes'
+      `);
+
+      // 5. Mark tokens with STALE DATA as EXPIRED
+      const staleData = await query(`
+        UPDATE token_opportunities
+        SET status = 'EXPIRED', rejection_reason = 'Stale data (>2h without update)'
+        WHERE status IN ('ANALYZING', 'WATCHING')
+        AND last_updated < NOW() - INTERVAL '2 hours'
+      `);
+
+      // 6. Mark tokens with NO VOLUME as DEAD
+      const deadNoVolume = await query(`
+        UPDATE token_opportunities
+        SET status = 'DEAD', rejection_reason = 'No trading volume (<$1K)'
+        WHERE status IN ('ANALYZING', 'WATCHING')
+        AND (volume_24h IS NULL OR volume_24h < 1000)
+        AND discovered_at < NOW() - INTERVAL '1 hour'
+      `);
+
+      // 7. Mark old ANALYZING tokens as EXPIRED
+      const expiredAnalyzing = await query(`
+        UPDATE token_opportunities
+        SET status = 'EXPIRED', rejection_reason = 'Analysis timeout'
+        WHERE status = 'ANALYZING'
+        AND discovered_at < NOW() - INTERVAL '2 hours'
+      `);
+
+      // 8. Mark tokens where PRICE COLLAPSED (>90%) as DEAD
+      const deadPrice = await query(`
+        UPDATE token_opportunities
+        SET status = 'DEAD', rejection_reason = 'Price collapsed >90%'
+        WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+        AND ath_price > 0
+        AND current_price > 0
+        AND (current_price / ath_price) < 0.1
+      `);
+
+      // 9. DELETE REJECTED tokens after 4 hours (not 7 days)
+      const deletedRejected = await query(`
+        DELETE FROM token_opportunities
+        WHERE status = 'REJECTED'
+        AND discovered_at < NOW() - INTERVAL '4 hours'
+      `);
+
+      // 10. Mark QUALIFIED but unexecuted tokens as EXPIRED after 2 hours
+      const expiredQualified = await query(`
+        UPDATE token_opportunities
+        SET status = 'EXPIRED', rejection_reason = 'Qualified but not executed in time'
+        WHERE status = 'QUALIFIED'
+        AND decision_time < NOW() - INTERVAL '2 hours'
+      `);
+
+      // 11. DELETE very old entries (older than 7 days)
+      const deletedOld = await query(`
+        DELETE FROM token_opportunities
+        WHERE discovered_at < NOW() - INTERVAL '7 days'
+      `);
+
+      // 12. DELETE DEAD/EXPIRED tokens older than 24 hours (keep DB clean)
+      const deletedDeadExpired = await query(`
+        DELETE FROM token_opportunities
+        WHERE status IN ('DEAD', 'EXPIRED')
+        AND discovered_at < NOW() - INTERVAL '24 hours'
+      `);
+
+      // 13. Remove from in-memory tracking
+      const tokensToRemove: string[] = [];
+      for (const [tokenAddress, opp] of this.trackedOpportunities.entries()) {
+        // Remove if expired
+        if (opp.expiresAt < Date.now()) {
+          tokensToRemove.push(tokenAddress);
+          continue;
+        }
+        // Remove if price collapsed
+        if (opp.highestPrice > 0 && opp.currentPrice > 0) {
+          const priceRatio = opp.currentPrice / opp.highestPrice;
+          if (priceRatio < 0.1) {
+            tokensToRemove.push(tokenAddress);
+            continue;
+          }
+        }
+        // Remove if no smart wallets
+        if (opp.smartWalletsEntered.length === 0) {
+          const ageMinutes = (Date.now() - opp.firstDetected) / 60000;
+          if (ageMinutes > 30) {
+            tokensToRemove.push(tokenAddress);
+            continue;
+          }
+        }
+      }
+
+      for (const addr of tokensToRemove) {
+        this.trackedOpportunities.delete(addr);
+      }
+
+      // Calculate totals
+      const totalMarkedDead =
+        (deadLiquidity.rowCount || 0) +
+        (deadSafety.rowCount || 0) +
+        (deadConviction.rowCount || 0) +
+        (deadNoWallets.rowCount || 0) +
+        (deadNoVolume.rowCount || 0) +
+        (deadPrice.rowCount || 0);
+
+      const totalMarkedExpired =
+        (staleData.rowCount || 0) +
+        (expiredAnalyzing.rowCount || 0) +
+        (expiredQualified.rowCount || 0);
+
+      const totalDeleted =
+        (deletedRejected.rowCount || 0) +
+        (deletedOld.rowCount || 0) +
+        (deletedDeadExpired.rowCount || 0);
+
+      const totalCleaned = totalMarkedDead + totalMarkedExpired + totalDeleted + tokensToRemove.length;
+
+      if (totalCleaned > 0) {
+        logger.info(`✅ AGGRESSIVE cleanup complete: ${totalCleaned} tokens cleaned`, {
+          markedDead: totalMarkedDead,
+          markedExpired: totalMarkedExpired,
+          deleted: totalDeleted,
+          inMemory: tokensToRemove.length,
+          breakdown: {
+            lowLiquidity: deadLiquidity.rowCount || 0,
+            lowSafety: deadSafety.rowCount || 0,
+            lowConviction: deadConviction.rowCount || 0,
+            noWallets: deadNoWallets.rowCount || 0,
+            noVolume: deadNoVolume.rowCount || 0,
+            priceCollapsed: deadPrice.rowCount || 0,
+            staleData: staleData.rowCount || 0,
+            analysisTimeout: expiredAnalyzing.rowCount || 0,
+            qualifiedExpired: expiredQualified.rowCount || 0
+          }
+        });
+      }
+
+      // Log remaining active count
+      const activeCount = await query(`
+        SELECT COUNT(*) as count FROM token_opportunities
+        WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+      `);
+      logger.info(`📊 Active opportunities remaining: ${activeCount.rows[0]?.count || 0}`);
+
+    } catch (error: any) {
+      logger.error('Error cleaning up dead tokens', { error: error.message });
+    }
+  }
+
+  /**
    * Re-analyze tokens with 0 safety scores
    * This catches tokens that were inserted before safety analysis was added
    */
   private async reanalyzeZeroScoreTokens(): Promise<void> {
     try {
       // Find tokens with 0 safety scores that are still analyzing
-      const result = await query<{ token_address: string; token_name: string; token_symbol: string }>(
-        `SELECT token_address, token_name, token_symbol
+      const result = await query<{
+        token_address: string;
+        token_name: string;
+        token_symbol: string;
+        smart_wallets_entered: string[];
+        tier1_count: number;
+        tier2_count: number;
+        tier3_count: number;
+        discovered_at: Date;
+        ath_price: number;
+      }>(
+        `SELECT token_address, token_name, token_symbol,
+                smart_wallets_entered, tier1_count, tier2_count, tier3_count,
+                discovered_at, ath_price
          FROM token_opportunities
          WHERE safety_score = 0
          AND status = 'ANALYZING'
@@ -781,11 +1215,27 @@ export class SignalTracker {
 
       for (const token of result.rows) {
         try {
-          // Run safety analysis
+          // Reconstruct wallet data from database
+          const walletAddresses = token.smart_wallets_entered || [];
+          const walletTiers = [
+            ...Array(token.tier1_count || 0).fill(1),
+            ...Array(token.tier2_count || 0).fill(2),
+            ...Array(token.tier3_count || 0).fill(3)
+          ];
+
+          const knownWalletData = {
+            walletAddresses,
+            walletTiers,
+            firstDetected: token.discovered_at ? new Date(token.discovered_at).getTime() : Date.now()
+          };
+
+          // Run safety analysis with wallet data
           const aggregatedSignal = await this.signalAggregator.aggregateSignals(
             token.token_address,
             token.token_name || 'Unknown',
-            token.token_symbol || '???'
+            token.token_symbol || '???',
+            knownWalletData,
+            token.ath_price || undefined
           );
 
           let safetyScore = 0;

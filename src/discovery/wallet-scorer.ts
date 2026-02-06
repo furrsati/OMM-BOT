@@ -147,153 +147,122 @@ export class WalletScorer {
   }
 
   /**
-   * Get wallet performance data
+   * Get wallet performance data from wallet_discoveries table
+   * This measures the wallet's ACTUAL performance - what happened to tokens after they bought
    */
   private async getWalletPerformance(walletAddress: string): Promise<WalletPerformance | null> {
     try {
-      // Get wallet's trade history from trades table
-      const tradesResult = await query<{
+      // Primary source: Get performance from wallet_discoveries table
+      const discoveryResult = await query<{
         token_address: string;
-        profit_loss_percent: string | null;
-        outcome: string | null;
+        peak_multiplier: string;
+        is_winner: boolean;
         entry_time: Date;
-        exit_time: Date | null;
+        seconds_after_launch: number;
       }>(
-        `SELECT token_address, profit_loss_percent, outcome, entry_time, exit_time
-         FROM trades
-         WHERE fingerprint->'smartWallets'->'addresses' ? $1
-         AND exit_time IS NOT NULL
-         ORDER BY entry_time DESC
-         LIMIT 100`,
+        `SELECT token_address, peak_multiplier, is_winner, entry_time, seconds_after_launch
+         FROM wallet_discoveries
+         WHERE wallet_address = $1
+         AND entry_time > NOW() - INTERVAL '30 days'
+         ORDER BY entry_time DESC`,
         [walletAddress]
       );
 
-      // Also get cached alpha discoveries
-      const discoveryResult = await query<{ value: string }>(
-        `SELECT value FROM cache
-         WHERE key LIKE $1
-         AND expires_at > NOW()`,
-        [`alpha_discovery:${walletAddress}:%`]
+      // If we have discovery data, use it
+      if (discoveryResult.rows.length > 0) {
+        const tokensEntered: string[] = [];
+        let wins = 0;
+        let losses = 0;
+        let totalMultiplier = 0;
+        let lastActiveTimestamp = 0;
+        let totalSecondsAfterLaunch = 0;
+
+        for (const row of discoveryResult.rows) {
+          if (!tokensEntered.includes(row.token_address)) {
+            tokensEntered.push(row.token_address);
+          }
+
+          const multiplier = parseFloat(row.peak_multiplier) || 1;
+          totalMultiplier += multiplier;
+
+          // A win is defined as 2x+ peak (matching CLAUDE.md definition)
+          if (row.is_winner || multiplier >= 2) {
+            wins++;
+          } else {
+            losses++;
+          }
+
+          const entryTime = new Date(row.entry_time).getTime();
+          if (entryTime > lastActiveTimestamp) {
+            lastActiveTimestamp = entryTime;
+          }
+
+          totalSecondsAfterLaunch += row.seconds_after_launch || 0;
+        }
+
+        const totalTrades = discoveryResult.rows.length;
+        const winRate = totalTrades > 0 ? wins / totalTrades : 0;
+        const averageReturn = totalTrades > 0 ? totalMultiplier / totalTrades : 1;
+        // Use average seconds after launch as a proxy for "hold time consistency"
+        // Lower is better (entered earlier)
+        const avgEntryDelay = totalTrades > 0 ? totalSecondsAfterLaunch / totalTrades : 300;
+        // Convert to equivalent hold time metric (inverse relationship)
+        const averageHoldTime = Math.max(3600, 14400 - avgEntryDelay * 10); // 1-4 hours ideal
+
+        if (lastActiveTimestamp === 0) {
+          lastActiveTimestamp = Date.now();
+        }
+
+        return {
+          address: walletAddress,
+          tokensEntered,
+          wins,
+          losses,
+          totalReturn: totalMultiplier,
+          averageReturn,
+          winRate,
+          lastActiveTimestamp,
+          averageHoldTime
+        };
+      }
+
+      // Fallback: Check smart_wallets table for existing data (manually added wallets)
+      const walletResult = await query<{
+        tokens_entered: number;
+        tokens_won: number;
+        last_active: Date;
+        win_rate: string;
+        average_return: string;
+        avg_peak_multiplier: string;
+      }>(
+        `SELECT tokens_entered, COALESCE(tokens_won, 0) as tokens_won, last_active,
+                win_rate, average_return, COALESCE(avg_peak_multiplier, 0) as avg_peak_multiplier
+         FROM smart_wallets WHERE address = $1`,
+        [walletAddress]
       );
 
-      // Parse discoveries
-      const tokensEntered: string[] = [];
-      let lastActiveTimestamp = 0;
+      if (walletResult.rows.length > 0) {
+        const w = walletResult.rows[0];
+        const tokensEntered = w.tokens_entered || 0;
+        const tokensWon = w.tokens_won || 0;
 
-      for (const row of discoveryResult.rows) {
-        try {
-          const data = JSON.parse(row.value);
-          if (!tokensEntered.includes(data.tokenAddress)) {
-            tokensEntered.push(data.tokenAddress);
-          }
-          if (data.discoveredAt > lastActiveTimestamp) {
-            lastActiveTimestamp = data.discoveredAt;
-          }
-        } catch {
-          continue;
-        }
-      }
-
-      // If no discoveries but we have trades, use trade tokens
-      if (tokensEntered.length === 0) {
-        for (const trade of tradesResult.rows) {
-          if (!tokensEntered.includes(trade.token_address)) {
-            tokensEntered.push(trade.token_address);
-          }
-          const tradeTime = new Date(trade.entry_time).getTime();
-          if (tradeTime > lastActiveTimestamp) {
-            lastActiveTimestamp = tradeTime;
-          }
-        }
-      }
-
-      if (tokensEntered.length === 0) {
-        // Check smart_wallets table for existing data
-        const walletResult = await query<{
-          tokens_entered: number;
-          last_active: Date;
-          win_rate: string;
-          average_return: string;
-          successful_trades: number;
-          total_trades: number;
-          average_hold_time: number;
-        }>(
-          `SELECT tokens_entered, last_active, win_rate, average_return,
-                  successful_trades, total_trades, average_hold_time
-           FROM smart_wallets WHERE address = $1`,
-          [walletAddress]
-        );
-
-        if (walletResult.rows.length > 0) {
-          const w = walletResult.rows[0];
+        // If wallet has some data, return it
+        if (tokensEntered > 0) {
           return {
             address: walletAddress,
-            tokensEntered: Array(w.tokens_entered).fill('unknown'),
-            wins: w.successful_trades,
-            losses: w.total_trades - w.successful_trades,
-            totalReturn: parseFloat(w.average_return) * w.total_trades,
-            averageReturn: parseFloat(w.average_return),
-            winRate: parseFloat(w.win_rate),
+            tokensEntered: Array(tokensEntered).fill('unknown'),
+            wins: tokensWon,
+            losses: tokensEntered - tokensWon,
+            totalReturn: parseFloat(w.avg_peak_multiplier || w.average_return) * tokensEntered,
+            averageReturn: parseFloat(w.avg_peak_multiplier || w.average_return) || 1,
+            winRate: parseFloat(w.win_rate) || 0,
             lastActiveTimestamp: new Date(w.last_active).getTime(),
-            averageHoldTime: w.average_hold_time
+            averageHoldTime: 7200 // Default to 2 hours (middle of ideal range)
           };
         }
-
-        return null;
       }
 
-      // Calculate performance from trades
-      let wins = 0;
-      let losses = 0;
-      let totalReturn = 0;
-      let totalHoldTime = 0;
-
-      for (const trade of tradesResult.rows) {
-        const profitPercent = parseFloat(trade.profit_loss_percent || '0');
-        const multiplier = 1 + (profitPercent / 100);
-
-        if (trade.outcome === 'WIN' || profitPercent >= 100) {
-          wins++;
-        } else if (trade.outcome === 'LOSS' || trade.outcome === 'RUG') {
-          losses++;
-        }
-
-        totalReturn += multiplier;
-
-        if (trade.exit_time && trade.entry_time) {
-          const holdTime = (new Date(trade.exit_time).getTime() - new Date(trade.entry_time).getTime()) / 1000;
-          totalHoldTime += holdTime;
-        }
-      }
-
-      const totalTrades = wins + losses;
-      const winRate = totalTrades > 0 ? wins / totalTrades : 0;
-      const averageReturn = totalTrades > 0 ? totalReturn / totalTrades : 0;
-      const averageHoldTime = totalTrades > 0 ? totalHoldTime / totalTrades : 0;
-
-      // Update last active from trades if more recent
-      if (tradesResult.rows.length > 0) {
-        const latestTrade = new Date(tradesResult.rows[0].entry_time).getTime();
-        if (latestTrade > lastActiveTimestamp) {
-          lastActiveTimestamp = latestTrade;
-        }
-      }
-
-      if (lastActiveTimestamp === 0) {
-        lastActiveTimestamp = Date.now();
-      }
-
-      return {
-        address: walletAddress,
-        tokensEntered,
-        wins,
-        losses,
-        totalReturn,
-        averageReturn,
-        winRate,
-        lastActiveTimestamp,
-        averageHoldTime
-      };
+      return null;
 
     } catch (error: any) {
       logger.debug('Error getting wallet performance', { error: error.message });

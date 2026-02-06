@@ -264,10 +264,11 @@ export default function ScannerPage() {
                                 {formatAddress(opportunity.tokenAddress)}
                               </p>
                               <a
-                                href={`https://solscan.io/token/${opportunity.tokenAddress}`}
+                                href={`https://pump.fun/coin/${opportunity.tokenAddress}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-muted-foreground hover:text-foreground"
+                                title="View on Pump.fun"
                               >
                                 <ExternalLink className="w-3 h-3" />
                               </a>

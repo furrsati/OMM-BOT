@@ -78,6 +78,7 @@ export default function LogsPage() {
   const [search, setSearch] = useState<string>('')
   const [searchInput, setSearchInput] = useState<string>('')
   const [limit, setLimit] = useState(100)
+  const [isGeneratingTestLogs, setIsGeneratingTestLogs] = useState(false)
 
   const queryParams = new URLSearchParams()
   if (level) queryParams.append('level', level)
@@ -111,6 +112,21 @@ export default function LogsPage() {
 
   const handleLoadMore = () => {
     setLimit((prev) => prev + 100)
+  }
+
+  const handleGenerateTestLogs = async () => {
+    setIsGeneratingTestLogs(true)
+    try {
+      const res = await fetch('/api/logs/test', { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        await mutate() // Refresh logs
+      }
+    } catch (error) {
+      console.error('Failed to generate test logs:', error)
+    } finally {
+      setIsGeneratingTestLogs(false)
+    }
   }
 
   const formatTimestamp = (timestamp: string) => {
@@ -204,6 +220,26 @@ export default function LogsPage() {
                 Search
               </Button>
             </div>
+
+            {/* Generate Test Logs */}
+            <Button
+              onClick={handleGenerateTestLogs}
+              variant="outline"
+              disabled={isGeneratingTestLogs}
+              title="Generate sample logs to test the logging system"
+            >
+              {isGeneratingTestLogs ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Activity className="w-4 h-4 mr-2" />
+                  Test Logs
+                </>
+              )}
+            </Button>
 
             {/* Refresh */}
             <Button

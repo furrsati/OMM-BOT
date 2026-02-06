@@ -13,7 +13,7 @@
 
 import { Connection, PublicKey, ParsedTransactionWithMeta } from '@solana/web3.js';
 import { randomUUID } from 'crypto';
-import { logger } from '../utils/logger';
+import { logger, logThinking, logStep, logAnalysis, logCheckpoint } from '../utils/logger';
 import { query } from '../db/postgres';
 import { rateLimitedRPC } from '../utils/rate-limiter';
 
@@ -73,6 +73,9 @@ export class WalletScanner {
     // Run scan every 6 hours
     const scanInterval = 6 * 60 * 60 * 1000; // 6 hours
 
+    // Start performance update loop (runs every 30 minutes)
+    this.startPerformanceUpdateLoop();
+
     while (this.scanningActive) {
       try {
         await this.runScanCycle();
@@ -82,6 +85,29 @@ export class WalletScanner {
         await this.sleep(60000); // Wait 1 minute on error
       }
     }
+  }
+
+  /**
+   * Start the performance update loop (updates token prices for discoveries)
+   */
+  private async startPerformanceUpdateLoop(): Promise<void> {
+    const updateInterval = 30 * 60 * 1000; // 30 minutes
+
+    // Run immediately on start
+    setTimeout(async () => {
+      await this.updateDiscoveryPerformance();
+    }, 5000); // Wait 5 seconds after start
+
+    // Then run every 30 minutes
+    setInterval(async () => {
+      if (this.scanningActive) {
+        try {
+          await this.updateDiscoveryPerformance();
+        } catch (error: any) {
+          logger.error('Error in performance update loop', { error: error.message });
+        }
+      }
+    }, updateInterval);
   }
 
   /**
@@ -96,15 +122,23 @@ export class WalletScanner {
    * Run a complete scan cycle
    */
   private async runScanCycle(): Promise<void> {
-    logger.info('🔍 Starting wallet scan cycle...');
+    logStep(1, 5, 'Starting wallet scan cycle - searching for alpha wallets...');
+    logThinking('SCANNER', 'Beginning scan for 5x-50x winning tokens to identify smart wallets');
 
     try {
       // Step 1: Find winning tokens (5×–50× in last 7 days)
+      logStep(1, 5, 'Scanning DexScreener for winning tokens (5x-50x gains)...');
       const winningTokens = await this.findWinningTokens();
-      logger.info(`Found ${winningTokens.length} winning tokens`);
+      logAnalysis('TOKEN_SCAN', `Found ${winningTokens.length} winning tokens`, {
+        count: winningTokens.length,
+        topTokens: winningTokens.slice(0, 5).map(t => ({
+          address: t.address.slice(0, 8),
+          multiplier: `${t.multiplier.toFixed(1)}x`
+        }))
+      });
 
       if (winningTokens.length === 0) {
-        logger.info('No winning tokens found in this cycle');
+        logThinking('SCANNER', 'No winning tokens found in this cycle - will retry later');
         return;
       }
 
@@ -112,34 +146,57 @@ export class WalletScanner {
       // Process only top 10 tokens to avoid excessive RPC usage
       let totalEarlyBuyers = 0;
       const tokensToProcess = winningTokens.slice(0, 10);
-      logger.info(`Processing ${tokensToProcess.length} of ${winningTokens.length} winning tokens`);
+      logStep(2, 5, `Processing ${tokensToProcess.length} winning tokens to find early buyers...`);
 
-      for (const token of tokensToProcess) {
+      for (let i = 0; i < tokensToProcess.length; i++) {
+        const token = tokensToProcess[i];
+        logThinking('SCANNER', `[${i + 1}/${tokensToProcess.length}] Analyzing ${token.address.slice(0, 8)}... (${token.multiplier.toFixed(1)}x)`);
+
         const earlyBuyers = await this.findEarlyBuyers(token);
         totalEarlyBuyers += earlyBuyers.length;
 
         // Step 3: Filter out deployer-connected wallets
+        logStep(3, 5, `Filtering deployer-connected wallets for ${token.address.slice(0, 8)}...`);
         const cleanBuyers = await this.filterDeployerConnectedWallets(
           earlyBuyers,
           token.address
         );
 
-        logger.info(`Token ${token.address.slice(0, 8)}... - ${cleanBuyers.length}/${earlyBuyers.length} clean early buyers`);
+        logCheckpoint('Deployer Filter', cleanBuyers.length > 0 ? 'PASS' : 'WARN',
+          `${cleanBuyers.length}/${earlyBuyers.length} wallets passed deployer check`);
 
         // Step 4: Filter out MEV bots and dump bots
+        logStep(4, 5, `Filtering MEV/dump bots...`);
         const alphaBuyers = await this.filterBotWallets(cleanBuyers);
 
+        logCheckpoint('Bot Filter', alphaBuyers.length > 0 ? 'PASS' : 'WARN',
+          `${alphaBuyers.length}/${cleanBuyers.length} wallets passed bot detection`);
+
         // Step 5: Cache alpha wallets for scoring
+        logStep(5, 5, `Caching ${alphaBuyers.length} alpha wallets to database...`);
         await this.cacheAlphaWallets(alphaBuyers);
+
+        logAnalysis('TOKEN_COMPLETE', `Token ${token.address.slice(0, 8)}... analysis complete`, {
+          token: token.address.slice(0, 8),
+          multiplier: `${token.multiplier.toFixed(1)}x`,
+          earlyBuyers: earlyBuyers.length,
+          cleanBuyers: cleanBuyers.length,
+          alphaWallets: alphaBuyers.length
+        });
 
         // Add delay between tokens to give RPC a break
         await this.sleep(2000);
       }
 
-      logger.info(`✅ Scan cycle complete - ${totalEarlyBuyers} early buyers found`);
+      logThinking('SCANNER', `Scan cycle complete: processed ${tokensToProcess.length} tokens, found ${totalEarlyBuyers} early buyers`, {
+        tokensProcessed: tokensToProcess.length,
+        totalEarlyBuyers,
+        nextScanIn: '6 hours'
+      });
 
     } catch (error: any) {
       logger.error('Error in scan cycle', { error: error.message, stack: error.stack });
+      logAnalysis('SCAN_ERROR', `Scan cycle failed: ${error.message}`);
       throw error;
     }
   }
@@ -1156,10 +1213,24 @@ export class WalletScanner {
 
   /**
    * Cache discovered alpha wallets for scoring
+   * Now also tracks token entry price for performance measurement
    */
   private async cacheAlphaWallets(buyers: EarlyBuyer[]): Promise<void> {
     try {
+      // Group buyers by token to fetch price once per token
+      const tokenPrices = new Map<string, { price: number; symbol: string }>();
+
       for (const buyer of buyers) {
+        // Get token price if not already fetched
+        if (!tokenPrices.has(buyer.tokenAddress)) {
+          const tokenData = await this.getTokenCurrentPrice(buyer.tokenAddress);
+          if (tokenData) {
+            tokenPrices.set(buyer.tokenAddress, tokenData);
+          }
+        }
+
+        const tokenInfo = tokenPrices.get(buyer.tokenAddress);
+
         // Check if wallet already exists in smart_wallets table
         const existingResult = await query<{ address: string; tokens_entered: number }>(
           `SELECT address, tokens_entered FROM smart_wallets WHERE address = $1`,
@@ -1190,7 +1261,26 @@ export class WalletScanner {
           );
         }
 
-        // Also cache the discovery event for later analysis
+        // Save discovery with price data for performance tracking
+        await query(
+          `INSERT INTO wallet_discoveries
+           (id, wallet_address, token_address, token_symbol, entry_time, entry_price_usd,
+            current_price_usd, peak_price_usd, peak_multiplier, current_multiplier,
+            seconds_after_launch, last_price_update, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, to_timestamp($5), $6, $6, $6, 1.0, 1.0, $7, NOW(), NOW(), NOW())
+           ON CONFLICT (wallet_address, token_address) DO NOTHING`,
+          [
+            randomUUID(),
+            buyer.walletAddress,
+            buyer.tokenAddress,
+            tokenInfo?.symbol || 'UNKNOWN',
+            buyer.buyTime,
+            tokenInfo?.price || 0,
+            buyer.secondsAfterLaunch
+          ]
+        );
+
+        // Also cache the discovery event for backwards compatibility
         await query(
           `INSERT INTO cache (key, value, expires_at)
            VALUES ($1, $2, NOW() + INTERVAL '30 days')
@@ -1203,7 +1293,8 @@ export class WalletScanner {
               tokenAddress: buyer.tokenAddress,
               buyTime: buyer.buyTime,
               secondsAfterLaunch: buyer.secondsAfterLaunch,
-              discoveredAt: Date.now()
+              discoveredAt: Date.now(),
+              entryPrice: tokenInfo?.price || 0
             })
           ]
         );
@@ -1213,6 +1304,348 @@ export class WalletScanner {
 
     } catch (error: any) {
       logger.error('Error caching alpha wallets', { error: error.message });
+    }
+  }
+
+  /**
+   * Get current price for a token from DexScreener
+   */
+  private async getTokenCurrentPrice(tokenAddress: string): Promise<{ price: number; symbol: string } | null> {
+    try {
+      const response = await this.fetchWithRetry(
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`,
+        { timeout: 5000 }
+      );
+
+      if (!response.ok) return null;
+
+      const data = await response.json() as { pairs?: any[] };
+      const mainPair = data.pairs?.[0];
+
+      if (!mainPair) return null;
+
+      return {
+        price: parseFloat(mainPair.priceUsd || '0'),
+        symbol: mainPair.baseToken?.symbol || 'UNKNOWN'
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Update price performance for all tracked discoveries
+   * Should be called periodically (every 30 minutes or so)
+   */
+  async updateDiscoveryPerformance(): Promise<void> {
+    logger.info('📊 Updating wallet discovery performance...');
+
+    try {
+      // Get all discoveries from last 7 days that need price updates
+      const discoveries = await query<{
+        id: string;
+        token_address: string;
+        entry_price_usd: string;
+        peak_price_usd: string;
+      }>(
+        `SELECT id, token_address, entry_price_usd, peak_price_usd
+         FROM wallet_discoveries
+         WHERE entry_time > NOW() - INTERVAL '7 days'
+         AND (last_price_update IS NULL OR last_price_update < NOW() - INTERVAL '30 minutes')
+         LIMIT 100`
+      );
+
+      logger.info(`Updating prices for ${discoveries.rows.length} discoveries`);
+
+      // Group by token to avoid duplicate API calls
+      const tokenGroups = new Map<string, string[]>();
+      for (const disc of discoveries.rows) {
+        const existing = tokenGroups.get(disc.token_address) || [];
+        existing.push(disc.id);
+        tokenGroups.set(disc.token_address, existing);
+      }
+
+      for (const [tokenAddress, discoveryIds] of tokenGroups) {
+        try {
+          const priceData = await this.getTokenCurrentPrice(tokenAddress);
+          if (!priceData || priceData.price === 0) continue;
+
+          const currentPrice = priceData.price;
+
+          // Update all discoveries for this token
+          for (const discId of discoveryIds) {
+            const disc = discoveries.rows.find(d => d.id === discId);
+            if (!disc) continue;
+
+            const entryPrice = parseFloat(disc.entry_price_usd) || currentPrice;
+            const previousPeak = parseFloat(disc.peak_price_usd) || currentPrice;
+            const newPeak = Math.max(previousPeak, currentPrice);
+
+            const currentMultiplier = entryPrice > 0 ? currentPrice / entryPrice : 1;
+            const peakMultiplier = entryPrice > 0 ? newPeak / entryPrice : 1;
+            const isWinner = peakMultiplier >= 2;
+
+            await query(
+              `UPDATE wallet_discoveries
+               SET current_price_usd = $1,
+                   peak_price_usd = $2,
+                   current_multiplier = $3,
+                   peak_multiplier = $4,
+                   is_winner = $5,
+                   last_price_update = NOW(),
+                   updated_at = NOW()
+               WHERE id = $6`,
+              [currentPrice, newPeak, currentMultiplier, peakMultiplier, isWinner, discId]
+            );
+          }
+
+          // Rate limit
+          await this.sleep(300);
+        } catch (error: any) {
+          logger.debug(`Error updating price for ${tokenAddress}: ${error.message}`);
+        }
+      }
+
+      // Now update smart_wallets aggregate metrics
+      await this.updateWalletAggregateMetrics();
+
+      logger.info('✅ Discovery performance update complete');
+
+    } catch (error: any) {
+      logger.error('Error updating discovery performance', { error: error.message });
+    }
+  }
+
+  /**
+   * Backfill discovery data for existing wallets that have no discoveries
+   * Scans their on-chain history to find recent token purchases
+   */
+  async backfillExistingWallets(): Promise<void> {
+    logger.info('📊 Backfilling discovery data for existing wallets...');
+
+    try {
+      // Get all wallets that have no discoveries
+      const walletsResult = await query<{ address: string }>(
+        `SELECT sw.address
+         FROM smart_wallets sw
+         LEFT JOIN wallet_discoveries wd ON sw.address = wd.wallet_address
+         WHERE sw.is_active = true
+         AND wd.id IS NULL
+         LIMIT 50`
+      );
+
+      if (walletsResult.rows.length === 0) {
+        logger.info('No wallets need backfilling');
+        return;
+      }
+
+      logger.info(`Backfilling ${walletsResult.rows.length} wallets...`);
+
+      for (const wallet of walletsResult.rows) {
+        try {
+          await this.backfillWalletHistory(wallet.address);
+          await this.sleep(1000); // Rate limit between wallets
+        } catch (error: any) {
+          logger.debug(`Error backfilling wallet ${wallet.address.slice(0, 8)}...: ${error.message}`);
+        }
+      }
+
+      // Update aggregate metrics after backfill
+      await this.updateWalletAggregateMetrics();
+
+      logger.info('✅ Backfill complete');
+
+    } catch (error: any) {
+      logger.error('Error in backfill', { error: error.message });
+    }
+  }
+
+  /**
+   * Backfill a single wallet's history by scanning their recent token holdings
+   */
+  private async backfillWalletHistory(walletAddress: string): Promise<void> {
+    logger.debug(`Backfilling wallet ${walletAddress.slice(0, 8)}...`);
+
+    try {
+      // Get wallet's token accounts to find what tokens they hold/held
+      const pubkey = new PublicKey(walletAddress);
+
+      // Get recent transaction signatures
+      const signatures = await rateLimitedRPC(
+        () => this.connection.getSignaturesForAddress(pubkey, { limit: 100 }, 'confirmed'),
+        1
+      );
+
+      if (signatures.length === 0) {
+        logger.debug(`No transactions found for ${walletAddress.slice(0, 8)}...`);
+        return;
+      }
+
+      // Track unique tokens found
+      const tokensFound = new Map<string, { buyTime: number; price: number; symbol: string }>();
+
+      // Parse recent transactions to find token swaps
+      for (const sig of signatures.slice(0, 30)) {
+        try {
+          const tx = await rateLimitedRPC(
+            () => this.connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 }),
+            0
+          );
+
+          if (!tx || !tx.meta) continue;
+
+          // Look for token balance increases (buys)
+          const postBalances = tx.meta.postTokenBalances || [];
+          const preBalances = tx.meta.preTokenBalances || [];
+
+          for (const post of postBalances) {
+            if (!post.mint || !post.owner) continue;
+            if (post.owner !== walletAddress) continue;
+
+            // Skip SOL and stablecoins
+            if (this.isCommonToken(post.mint)) continue;
+
+            const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
+            const preAmount = parseFloat(pre?.uiTokenAmount?.uiAmount?.toString() || '0');
+            const postAmount = parseFloat(post.uiTokenAmount?.uiAmount?.toString() || '0');
+
+            // If balance increased, this was a buy
+            if (postAmount > preAmount && !tokensFound.has(post.mint)) {
+              tokensFound.set(post.mint, {
+                buyTime: sig.blockTime || Math.floor(Date.now() / 1000),
+                price: 0,
+                symbol: 'UNKNOWN'
+              });
+            }
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      logger.debug(`Found ${tokensFound.size} tokens for wallet ${walletAddress.slice(0, 8)}...`);
+
+      // For each token found, get current price and create discovery record
+      for (const [tokenAddress, data] of tokensFound) {
+        try {
+          const priceData = await this.getTokenCurrentPrice(tokenAddress);
+          if (!priceData) continue;
+
+          // Get token performance data
+          const perfData = await this.getTokenPerformance(tokenAddress);
+
+          const entryPrice = priceData.price;
+          const currentPrice = priceData.price;
+          const peakMultiplier = perfData ? perfData.multiplier : 1;
+          const isWinner = peakMultiplier >= 2;
+
+          // Calculate seconds after launch (estimate based on token age)
+          const tokenAge = perfData ? Math.floor(Date.now() / 1000) - perfData.launchTime : 300;
+          const secondsAfterLaunch = Math.min(tokenAge, 300); // Cap at 5 minutes for early entry assumption
+
+          // Insert discovery record
+          await query(
+            `INSERT INTO wallet_discoveries
+             (id, wallet_address, token_address, token_symbol, entry_time, entry_price_usd,
+              current_price_usd, peak_price_usd, peak_multiplier, current_multiplier,
+              is_winner, seconds_after_launch, last_price_update, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, to_timestamp($5), $6, $7, $8, $9, $10, $11, $12, NOW(), NOW(), NOW())
+             ON CONFLICT (wallet_address, token_address) DO NOTHING`,
+            [
+              randomUUID(),
+              walletAddress,
+              tokenAddress,
+              priceData.symbol,
+              data.buyTime,
+              entryPrice,
+              currentPrice,
+              currentPrice * peakMultiplier,
+              peakMultiplier,
+              1.0,
+              isWinner,
+              secondsAfterLaunch
+            ]
+          );
+
+          await this.sleep(300); // Rate limit API calls
+        } catch (error: any) {
+          logger.debug(`Error processing token ${tokenAddress.slice(0, 8)}...: ${error.message}`);
+        }
+      }
+
+    } catch (error: any) {
+      logger.debug(`Error backfilling wallet ${walletAddress.slice(0, 8)}...: ${error.message}`);
+    }
+  }
+
+  /**
+   * Check if a token is a common token (SOL, USDC, etc) to skip
+   */
+  private isCommonToken(mint: string): boolean {
+    const commonTokens = [
+      'So11111111111111111111111111111111111111112',  // Wrapped SOL
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+      '7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj', // stSOL
+      'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',  // mSOL
+    ];
+    return commonTokens.includes(mint);
+  }
+
+  /**
+   * Update aggregate metrics on smart_wallets based on discoveries
+   */
+  private async updateWalletAggregateMetrics(): Promise<void> {
+    try {
+      // Update all wallets with their discovery statistics
+      await query(`
+        UPDATE smart_wallets sw
+        SET
+          tokens_entered = COALESCE(agg.total_tokens, 0),
+          tokens_won = COALESCE(agg.winning_tokens, 0),
+          win_rate = CASE
+            WHEN COALESCE(agg.total_tokens, 0) > 0
+            THEN COALESCE(agg.winning_tokens, 0)::DECIMAL / agg.total_tokens
+            ELSE 0
+          END,
+          average_return = COALESCE(agg.avg_peak, 0),
+          avg_peak_multiplier = COALESCE(agg.avg_peak, 0),
+          best_pick_multiplier = COALESCE(agg.best_pick, 0),
+          recent_tokens = COALESCE(agg.recent, '[]'::JSONB),
+          updated_at = NOW()
+        FROM (
+          SELECT
+            wallet_address,
+            COUNT(*) as total_tokens,
+            COUNT(*) FILTER (WHERE is_winner = true) as winning_tokens,
+            ROUND(AVG(peak_multiplier)::NUMERIC, 2) as avg_peak,
+            ROUND(MAX(peak_multiplier)::NUMERIC, 2) as best_pick,
+            COALESCE(
+              (SELECT jsonb_agg(jsonb_build_object(
+                'token', token_symbol,
+                'multiplier', ROUND(peak_multiplier::NUMERIC, 1),
+                'isWinner', is_winner
+              ) ORDER BY entry_time DESC)
+              FROM (
+                SELECT token_symbol, peak_multiplier, is_winner, entry_time
+                FROM wallet_discoveries wd2
+                WHERE wd2.wallet_address = wd.wallet_address
+                ORDER BY entry_time DESC
+                LIMIT 5
+              ) recent
+              ), '[]'::JSONB
+            ) as recent
+          FROM wallet_discoveries wd
+          WHERE entry_time > NOW() - INTERVAL '30 days'
+          GROUP BY wallet_address
+        ) agg
+        WHERE sw.address = agg.wallet_address
+      `);
+
+      logger.debug('Updated wallet aggregate metrics');
+
+    } catch (error: any) {
+      logger.error('Error updating wallet aggregate metrics', { error: error.message });
     }
   }
 

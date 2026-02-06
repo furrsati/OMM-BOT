@@ -4,6 +4,7 @@ import useSWR from 'swr'
 import { fetcher } from '@/lib/api'
 import { REFRESH_INTERVALS } from '@/lib/swr'
 import { StatusBadge } from '@/components/status-badge'
+import { ConnectionStatus } from '@/components/connection-status'
 import { RegimeBadge } from '@/components/regime-badge'
 import { MetricCard } from '@/components/metric-card'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
@@ -87,7 +88,7 @@ interface AlertsResponse {
 export default function Dashboard() {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
-  const { data: statusRes, mutate: mutateStatus } = useSWR<StatusResponse>(
+  const { data: statusRes, error: statusError, mutate: mutateStatus } = useSWR<StatusResponse>(
     '/api/status',
     fetcher,
     { refreshInterval: REFRESH_INTERVALS.REALTIME }
@@ -168,6 +169,7 @@ export default function Dashboard() {
           <p className="text-muted-foreground">Monitor your trading bot</p>
         </div>
         <div className="flex items-center gap-4">
+          <ConnectionStatus isConnected={!statusError} />
           <StatusBadge status={getBotStatus()} />
           <RegimeBadge regime={status?.market?.regime || 'PAUSE'} />
           {status?.bot?.paperTradingMode && (

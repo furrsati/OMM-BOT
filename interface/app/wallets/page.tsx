@@ -19,6 +19,12 @@ import { formatAddress, formatNumber, formatPercent, timeAgo } from '@/lib/utils
 import { Wallet, Plus, Trash2, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 
+interface RecentToken {
+  token: string
+  multiplier: number
+  isWinner: boolean
+}
+
 interface SmartWallet {
   id: string
   address: string
@@ -26,7 +32,10 @@ interface SmartWallet {
   score: number
   winRate: number
   avgReturn: number
-  totalTrades: number
+  tokensEntered: number
+  tokensWon: number
+  bestPick: number
+  recentTokens: RecentToken[]
   lastActive: string
   isCrowded: boolean
   notes: string
@@ -119,8 +128,10 @@ export default function WalletsPage() {
                 <TableHead>Address</TableHead>
                 <TableHead className="text-right">Score</TableHead>
                 <TableHead className="text-right">Win Rate</TableHead>
-                <TableHead className="text-right">Avg Return</TableHead>
-                <TableHead className="text-right">Trades</TableHead>
+                <TableHead className="text-right">Avg Peak</TableHead>
+                <TableHead className="text-right">Best Pick</TableHead>
+                <TableHead className="text-right">Tokens</TableHead>
+                <TableHead>Recent Picks</TableHead>
                 <TableHead className="text-right">Last Active</TableHead>
                 <TableHead></TableHead>
               </TableRow>
@@ -141,23 +152,56 @@ export default function WalletsPage() {
                       >
                         <ExternalLink className="w-3 h-3" />
                       </a>
+                      {wallet.isCrowded && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-500">
+                          Crowded
+                        </span>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell className="text-right font-mono">
                     {formatNumber(wallet.score, 0)}
                   </TableCell>
                   <TableCell className="text-right font-mono">
-                    {formatNumber(wallet.winRate)}%
-                  </TableCell>
-                  <TableCell
-                    className={`text-right font-mono ${
-                      (wallet.avgReturn || 0) >= 0 ? 'text-success' : 'text-destructive'
-                    }`}
-                  >
-                    {formatPercent(wallet.avgReturn || 0)}
+                    <span className={wallet.winRate >= 0.4 ? 'text-success' : wallet.winRate >= 0.2 ? 'text-yellow-500' : 'text-muted-foreground'}>
+                      {formatNumber(wallet.winRate * 100, 0)}%
+                    </span>
+                    <span className="text-xs text-muted-foreground ml-1">
+                      ({wallet.tokensWon || 0}/{wallet.tokensEntered || 0})
+                    </span>
                   </TableCell>
                   <TableCell className="text-right font-mono">
-                    {wallet.totalTrades || 0}
+                    <span className={wallet.avgReturn >= 2 ? 'text-success' : 'text-muted-foreground'}>
+                      {wallet.avgReturn > 0 ? `${formatNumber(wallet.avgReturn, 1)}x` : '—'}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
+                    <span className={wallet.bestPick >= 5 ? 'text-success' : wallet.bestPick >= 2 ? 'text-yellow-500' : 'text-muted-foreground'}>
+                      {wallet.bestPick > 0 ? `${formatNumber(wallet.bestPick, 1)}x` : '—'}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
+                    {wallet.tokensEntered || 0}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1 flex-wrap max-w-[200px]">
+                      {(wallet.recentTokens || []).slice(0, 3).map((token, i) => (
+                        <span
+                          key={i}
+                          className={`text-xs px-1.5 py-0.5 rounded font-mono ${
+                            token.isWinner
+                              ? 'bg-success/20 text-success'
+                              : 'bg-muted text-muted-foreground'
+                          }`}
+                          title={`${token.token}: ${token.multiplier}x`}
+                        >
+                          {token.token?.slice(0, 4) || '?'} {token.multiplier}x
+                        </span>
+                      ))}
+                      {(!wallet.recentTokens || wallet.recentTokens.length === 0) && (
+                        <span className="text-xs text-muted-foreground">No data yet</span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground text-sm">
                     {wallet.lastActive ? timeAgo(wallet.lastActive) : '—'}

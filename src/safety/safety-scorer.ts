@@ -23,7 +23,7 @@
  */
 
 import { Connection } from '@solana/web3.js';
-import { logger } from '../utils/logger';
+import { logger, logThinking, logCheckpoint, logStep, logAnalysis, logScoring } from '../utils/logger';
 import { ContractAnalyzer, ContractAnalysis } from './contract-analyzer';
 import { HoneypotDetector, HoneypotAnalysis } from './honeypot-detector';
 import { BlacklistManager, BlacklistCheckResult } from './blacklist-manager';
@@ -75,76 +75,115 @@ export class SafetyScorer {
    * Perform complete safety analysis
    */
   async analyze(tokenAddress: string, deployerAddress?: string): Promise<SafetyAnalysis> {
-    logger.info(`🛡️  Running safety analysis for ${tokenAddress.slice(0, 8)}...`);
+    const tokenShort = tokenAddress.slice(0, 8);
+    logStep(1, 5, `Starting safety analysis for ${tokenShort}...`);
+    logThinking('SAFETY', `Analyzing token ${tokenShort} for honeypots, authorities, and holder concentration`);
 
     try {
       // Step 1: Check blacklist first (fastest)
+      logStep(1, 5, `Checking blacklist database...`);
       const blacklistCheck = await this.blacklistManager.isBlacklisted(tokenAddress, true);
       if (blacklistCheck.isBlacklisted) {
-        logger.warn(`Token ${tokenAddress.slice(0, 8)}... BLACKLISTED: ${blacklistCheck.reason}`);
+        logCheckpoint('Blacklist Check', 'FAIL', `Token is blacklisted: ${blacklistCheck.reason}`);
+        logAnalysis('BLACKLIST', `HARD REJECT - ${blacklistCheck.reason}`, { token: tokenShort });
         return this.createHardRejectAnalysis(
           tokenAddress,
           'BLACKLISTED',
           blacklistCheck.reason || 'Address is blacklisted'
         );
       }
+      logCheckpoint('Blacklist Check', 'PASS', 'Token not on blacklist');
 
       // Step 2: Check deployer blacklist if provided
       if (deployerAddress) {
+        logThinking('SAFETY', `Checking deployer ${deployerAddress.slice(0, 8)} against blacklist...`);
         const deployerCheck = await this.blacklistManager.isBlacklisted(deployerAddress, true);
         if (deployerCheck.isBlacklisted) {
-          logger.warn(`Deployer ${deployerAddress.slice(0, 8)}... BLACKLISTED: ${deployerCheck.reason}`);
+          logCheckpoint('Deployer Blacklist', 'FAIL', `Deployer is blacklisted: ${deployerCheck.reason}`);
+          logAnalysis('BLACKLIST', `HARD REJECT - Deployer blacklisted`, { deployer: deployerAddress.slice(0, 8) });
           return this.createHardRejectAnalysis(
             tokenAddress,
             'BLACKLISTED_DEPLOYER',
             `Deployer is blacklisted: ${deployerCheck.reason}`
           );
         }
+        logCheckpoint('Deployer Blacklist', 'PASS', 'Deployer not on blacklist');
       }
 
       // Step 3: Contract analysis
+      logStep(2, 5, `Analyzing contract authorities and holder distribution...`);
       const contractAnalysis = await this.contractAnalyzer.analyze(tokenAddress);
 
       // Hard reject: Mint authority
+      logThinking('SAFETY', `Checking mint authority...`);
       if (contractAnalysis.hasMintAuthority) {
+        logCheckpoint('Mint Authority', 'FAIL', 'Token has active mint authority - devs can print tokens');
+        logAnalysis('CONTRACT', `HARD REJECT - Active mint authority`, { token: tokenShort });
         return this.createHardRejectAnalysis(
           tokenAddress,
           'MINT_AUTHORITY',
           'Token has active mint authority'
         );
       }
+      logCheckpoint('Mint Authority', 'PASS', 'No mint authority or revoked');
 
       // Hard reject: Freeze authority
+      logThinking('SAFETY', `Checking freeze authority...`);
       if (contractAnalysis.hasFreezeAuthority) {
+        logCheckpoint('Freeze Authority', 'FAIL', 'Token has active freeze authority - devs can freeze wallets');
+        logAnalysis('CONTRACT', `HARD REJECT - Active freeze authority`, { token: tokenShort });
         return this.createHardRejectAnalysis(
           tokenAddress,
           'FREEZE_AUTHORITY',
           'Token has active freeze authority'
         );
       }
+      logCheckpoint('Freeze Authority', 'PASS', 'No freeze authority or revoked');
 
       // Hard reject: Single holder > 30%
+      logThinking('SAFETY', `Checking holder concentration (top holder: ${contractAnalysis.topHolderPercent?.toFixed(1) || 0}%)...`);
       if (contractAnalysis.topHolderPercent > 30) {
+        logCheckpoint('Holder Concentration', 'FAIL', `Top holder owns ${contractAnalysis.topHolderPercent.toFixed(1)}% (> 30% limit)`);
+        logAnalysis('DISTRIBUTION', `HARD REJECT - Single holder owns ${contractAnalysis.topHolderPercent.toFixed(1)}%`, { token: tokenShort });
         return this.createHardRejectAnalysis(
           tokenAddress,
           'CONCENTRATED_HOLDINGS',
           `Single holder owns ${contractAnalysis.topHolderPercent.toFixed(1)}% (> 30%)`
         );
       }
+      logCheckpoint('Holder Concentration', 'PASS', `Top holder owns ${contractAnalysis.topHolderPercent?.toFixed(1) || 0}% (< 30%)`);
 
       // Step 4: Honeypot detection
+      logStep(3, 5, `Running honeypot detection (simulating sell)...`);
       const honeypotAnalysis = await this.honeypotDetector.detect(tokenAddress);
 
       // Hard reject: Honeypot
       if (honeypotAnalysis.isHoneypot) {
+        logCheckpoint('Honeypot Detection', 'FAIL', 'Token cannot be sold - confirmed honeypot');
+        logAnalysis('HONEYPOT', `HARD REJECT - Cannot sell token`, { token: tokenShort, error: honeypotAnalysis.simulationError });
         return this.createHardRejectAnalysis(
           tokenAddress,
           'HONEYPOT',
           'Token cannot be sold (honeypot)'
         );
       }
+      logCheckpoint('Honeypot Detection', 'PASS', `Sell simulation successful (tax: ${honeypotAnalysis.sellTaxPercent?.toFixed(1) || 0}%)`);
 
       // Step 5: Calculate overall score
+      logStep(4, 5, `Calculating safety scores...`);
+
+      logScoring('Contract/Authority', contractAnalysis.authorityScore, 30,
+        `MintAuth: ${contractAnalysis.hasMintAuthority ? 'YES' : 'NO'}, FreezeAuth: ${contractAnalysis.hasFreezeAuthority ? 'YES' : 'NO'}`);
+
+      logScoring('Holder Distribution', contractAnalysis.distributionScore, 25,
+        `TopHolder: ${contractAnalysis.topHolderPercent?.toFixed(1) || 0}%, Top10: ${contractAnalysis.top10HolderPercent?.toFixed(1) || 0}%`);
+
+      logScoring('Honeypot Safety', honeypotAnalysis.score, 25,
+        `CanSell: YES, SellTax: ${honeypotAnalysis.sellTaxPercent?.toFixed(1) || 0}%, BuyTax: ${honeypotAnalysis.buyTaxPercent?.toFixed(1) || 0}%`);
+
+      logScoring('Liquidity', contractAnalysis.liquidityScore, 20,
+        `Depth: ${contractAnalysis.liquidityDepth?.toLocaleString() || 0}, Locked: ${contractAnalysis.liquidityLocked ? 'YES' : 'NO'}`);
+
       const overallScore =
         contractAnalysis.authorityScore +
         contractAnalysis.distributionScore +
@@ -153,6 +192,14 @@ export class SafetyScorer {
 
       // Determine safety level
       const safetyLevel = this.determineSafetyLevel(overallScore);
+
+      logStep(5, 5, `Finalizing safety analysis...`);
+      logThinking('SAFETY', `Final safety score: ${overallScore}/100 (${safetyLevel})`, {
+        contractScore: contractAnalysis.authorityScore,
+        distributionScore: contractAnalysis.distributionScore,
+        honeypotScore: honeypotAnalysis.score,
+        liquidityScore: contractAnalysis.liquidityScore
+      });
 
       const analysis: SafetyAnalysis = {
         tokenAddress,
@@ -170,10 +217,11 @@ export class SafetyScorer {
         timestamp: Date.now()
       };
 
-      logger.info(`✅ Safety analysis complete`, {
-        token: tokenAddress.slice(0, 8),
+      logAnalysis('COMPLETE', `Safety: ${overallScore}/100 (${safetyLevel})`, {
+        token: tokenShort,
         score: overallScore,
-        level: safetyLevel
+        level: safetyLevel,
+        hardRejected: false
       });
 
       return analysis;
@@ -183,6 +231,8 @@ export class SafetyScorer {
         token: tokenAddress,
         error: error.message
       });
+
+      logAnalysis('ERROR', `Safety analysis failed: ${error.message}`, { token: tokenShort });
 
       // Return unsafe on error (fail closed)
       return this.createHardRejectAnalysis(

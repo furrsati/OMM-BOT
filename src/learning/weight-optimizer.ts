@@ -383,8 +383,11 @@ export class WeightOptimizer {
 
   /**
    * Get current active weights from database
+   * Returns weights as decimals (0.30 for 30%) for proper multiplication
    */
   async getCurrentWeights(): Promise<CategoryWeights> {
+    let weights: CategoryWeights;
+
     try {
       const result = await query<{ weights: CategoryWeights }>(
         `SELECT weights FROM learning_snapshots
@@ -393,13 +396,26 @@ export class WeightOptimizer {
       );
 
       if (result.rows.length > 0 && result.rows[0].weights) {
-        return result.rows[0].weights;
+        weights = result.rows[0].weights;
+      } else {
+        weights = { ...this.DEFAULT_WEIGHTS };
       }
     } catch (error: any) {
       logger.debug('Error fetching current weights', { error: error.message });
+      weights = { ...this.DEFAULT_WEIGHTS };
     }
 
-    return { ...this.DEFAULT_WEIGHTS };
+    // CRITICAL FIX: Convert weights from percentages (30) to decimals (0.30)
+    // This ensures proper conviction score calculation
+    // Weights are stored as percentages (30, 25, 15, 10, 20) but need to be
+    // decimals for multiplication (0.30, 0.25, 0.15, 0.10, 0.20)
+    return {
+      smartWallet: weights.smartWallet > 1 ? weights.smartWallet / 100 : weights.smartWallet,
+      tokenSafety: weights.tokenSafety > 1 ? weights.tokenSafety / 100 : weights.tokenSafety,
+      marketConditions: weights.marketConditions > 1 ? weights.marketConditions / 100 : weights.marketConditions,
+      socialSignals: weights.socialSignals > 1 ? weights.socialSignals / 100 : weights.socialSignals,
+      entryQuality: weights.entryQuality > 1 ? weights.entryQuality / 100 : weights.entryQuality
+    };
   }
 
   /**

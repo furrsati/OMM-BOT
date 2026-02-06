@@ -11,7 +11,7 @@
  * This is the final gatekeeper before trade execution.
  */
 
-import { logger } from '../utils/logger';
+import { logger, logThinking, logCheckpoint, logStep, logDecision } from '../utils/logger';
 import { AggregatedSignal } from './signal-aggregator';
 import { ConvictionScore } from './conviction-scorer';
 
@@ -70,13 +70,18 @@ export class EntryDecisionEngine {
     signal: AggregatedSignal,
     conviction: ConvictionScore
   ): Promise<EntryDecision> {
-    logger.info(`🎯 Making entry decision for ${signal.tokenAddress.slice(0, 8)}...`);
+    const tokenShort = signal.tokenAddress.slice(0, 8);
+    logStep(1, 9, `Entry decision engine starting for ${tokenShort}...`);
+    logThinking('ENTRY', `Evaluating token ${tokenShort} with conviction ${conviction.totalScore.toFixed(1)} (${conviction.convictionLevel})`);
 
     try {
       // Step 1: Check hard reject rules (instant fail)
+      logStep(1, 9, `Checking hard reject rules...`);
       const hardRejectCheck = this.checkHardRejects(signal, conviction);
       if (!hardRejectCheck.passed) {
         const reason = hardRejectCheck.reason || 'Hard reject rule triggered';
+        logCheckpoint('Hard Reject Rules', 'FAIL', reason);
+        logDecision('REJECTED', `Hard reject triggered: ${reason}`, { token: tokenShort });
         return this.createRejectionDecision(
           conviction,
           'HARD_REJECT',
@@ -85,12 +90,22 @@ export class EntryDecisionEngine {
           reason
         );
       }
+      logCheckpoint('Hard Reject Rules', 'PASS', 'No hard rejects triggered');
 
       // Step 2: Get portfolio limits
+      logStep(2, 9, `Loading portfolio limits...`);
       const limits = await this.getPortfolioLimits();
+      logThinking('LIMITS', `Portfolio state loaded`, {
+        dailyPnL: `${limits.dailyPnL.toFixed(2)}%`,
+        openPositions: `${limits.openPositions}/${limits.maxOpenPositions}`,
+        totalExposure: `${limits.totalExposurePercent.toFixed(1)}%/${limits.maxTotalExposure}%`
+      });
 
       // Step 3: Check daily loss limit
+      logStep(3, 9, `Checking daily loss limit...`);
       if (!this.checkDailyLossLimit(limits)) {
+        logCheckpoint('Daily Loss Limit', 'FAIL', `Daily P&L ${limits.dailyPnL.toFixed(2)}% <= ${limits.dailyLossLimit}%`);
+        logDecision('REJECTED', 'Daily loss limit reached', { dailyPnL: limits.dailyPnL });
         return this.createRejectionDecision(
           conviction,
           'DAILY_LOSS_LIMIT',
@@ -99,9 +114,13 @@ export class EntryDecisionEngine {
           null
         );
       }
+      logCheckpoint('Daily Loss Limit', 'PASS', `Daily P&L ${limits.dailyPnL.toFixed(2)}% > ${limits.dailyLossLimit}%`);
 
       // Step 4: Check daily profit limit
+      logStep(4, 9, `Checking daily profit limit...`);
       if (!this.checkDailyProfitLimit(limits)) {
+        logCheckpoint('Daily Profit Limit', 'FAIL', `Daily P&L ${limits.dailyPnL.toFixed(2)}% >= ${limits.dailyProfitLimit}%`);
+        logDecision('REJECTED', 'Daily profit limit reached (stop new entries)', { dailyPnL: limits.dailyPnL });
         return this.createRejectionDecision(
           conviction,
           'DAILY_PROFIT_LIMIT',
@@ -110,9 +129,13 @@ export class EntryDecisionEngine {
           null
         );
       }
+      logCheckpoint('Daily Profit Limit', 'PASS', `Daily P&L ${limits.dailyPnL.toFixed(2)}% < ${limits.dailyProfitLimit}%`);
 
       // Step 5: Check max open positions
+      logStep(5, 9, `Checking max open positions...`);
       if (!this.checkMaxPositions(limits)) {
+        logCheckpoint('Max Positions', 'FAIL', `${limits.openPositions} >= ${limits.maxOpenPositions}`);
+        logDecision('REJECTED', 'Maximum open positions reached', { openPositions: limits.openPositions });
         return this.createRejectionDecision(
           conviction,
           'MAX_POSITIONS',
@@ -121,10 +144,14 @@ export class EntryDecisionEngine {
           null
         );
       }
+      logCheckpoint('Max Positions', 'PASS', `${limits.openPositions} < ${limits.maxOpenPositions}`);
 
       // Step 6: Check cooldown period
+      logStep(6, 9, `Checking cooldown status...`);
       if (!this.checkCooldown()) {
         const minutesRemaining = Math.ceil((this.cooldownUntil - Date.now()) / 60000);
+        logCheckpoint('Cooldown Period', 'FAIL', `${minutesRemaining} min remaining`);
+        logDecision('REJECTED', `Cooldown active for ${minutesRemaining} more minutes`, { cooldownUntil: new Date(this.cooldownUntil).toISOString() });
         return this.createRejectionDecision(
           conviction,
           'COOLDOWN',
@@ -133,9 +160,16 @@ export class EntryDecisionEngine {
           null
         );
       }
+      logCheckpoint('Cooldown Period', 'PASS', 'No cooldown active');
 
       // Step 7: Check conviction threshold
+      logStep(7, 9, `Checking conviction threshold...`);
       if (!conviction.shouldEnter) {
+        logCheckpoint('Conviction Threshold', 'FAIL', `Score ${conviction.totalScore.toFixed(1)} below entry threshold`);
+        logDecision('REJECTED', `Conviction too low: ${conviction.totalScore.toFixed(1)} (${conviction.convictionLevel})`, {
+          score: conviction.totalScore,
+          level: conviction.convictionLevel
+        });
         return this.createRejectionDecision(
           conviction,
           'LOW_CONVICTION',
@@ -144,9 +178,14 @@ export class EntryDecisionEngine {
           null
         );
       }
+      logCheckpoint('Conviction Threshold', 'PASS', `Score ${conviction.totalScore.toFixed(1)} meets threshold`);
 
       // Step 8: Check total portfolio exposure
+      logStep(8, 9, `Checking total portfolio exposure...`);
       if (!this.checkTotalExposure(limits, conviction.recommendedPositionPercent)) {
+        const newExposure = limits.totalExposurePercent + conviction.recommendedPositionPercent;
+        logCheckpoint('Portfolio Exposure', 'FAIL', `${newExposure.toFixed(1)}% would exceed ${limits.maxTotalExposure}%`);
+        logDecision('REJECTED', 'Would exceed max portfolio exposure', { newExposure, maxExposure: limits.maxTotalExposure });
         return this.createRejectionDecision(
           conviction,
           'MAX_EXPOSURE',
@@ -155,15 +194,20 @@ export class EntryDecisionEngine {
           null
         );
       }
+      logCheckpoint('Portfolio Exposure', 'PASS', `${(limits.totalExposurePercent + conviction.recommendedPositionPercent).toFixed(1)}% <= ${limits.maxTotalExposure}%`);
 
       // Step 9: Adjust position size based on losing streak
+      logStep(9, 9, `Calculating final position size...`);
       let adjustedPositionSize = conviction.recommendedPositionPercent;
       if (this.losingStreak >= 2) {
+        const originalSize = adjustedPositionSize;
         adjustedPositionSize *= 0.75; // Reduce by 25%
-        logger.warn(`Reducing position size due to ${this.losingStreak} losing streak`);
+        logThinking('STREAK_ADJ', `Losing streak ${this.losingStreak}: reducing position ${originalSize}% → ${adjustedPositionSize.toFixed(2)}% (-25%)`);
       }
       if (this.losingStreak >= 3) {
+        const originalSize = adjustedPositionSize;
         adjustedPositionSize *= 0.5; // Reduce by 50%
+        logThinking('STREAK_ADJ', `Losing streak ${this.losingStreak}: further reducing ${originalSize.toFixed(2)}% → ${adjustedPositionSize.toFixed(2)}% (-50%)`);
       }
 
       // ALL CHECKS PASSED - APPROVE ENTRY
@@ -183,11 +227,14 @@ export class EntryDecisionEngine {
         timestamp: Date.now()
       };
 
-      logger.info(`✅ ENTRY APPROVED`, {
-        token: signal.tokenAddress.slice(0, 8),
+      logDecision('APPROVED FOR ENTRY', `All 9 checks passed`, {
+        token: tokenShort,
         conviction: conviction.totalScore.toFixed(1),
-        positionSize: adjustedPositionSize.toFixed(2) + '%'
+        level: conviction.convictionLevel,
+        positionSize: `${adjustedPositionSize.toFixed(2)}%`
       });
+
+      logThinking('SUMMARY', `Entry approved: ${tokenShort} | Conviction: ${conviction.totalScore.toFixed(1)} (${conviction.convictionLevel}) | Position: ${adjustedPositionSize.toFixed(2)}%`);
 
       return decision;
 
@@ -196,6 +243,8 @@ export class EntryDecisionEngine {
         token: signal.tokenAddress,
         error: error.message
       });
+
+      logDecision('ERROR', `Decision engine error: ${error.message}`, { token: tokenShort });
 
       // On error, reject (fail closed)
       return this.createRejectionDecision(

@@ -85,21 +85,29 @@ export class WalletManager {
     logger.info('🔧 Performing weekly wallet maintenance...');
 
     try {
-      // Step 1: Re-score ALL wallets
+      // Step 1: Remove poor performing wallets FIRST
+      logger.info('Removing poor performing wallets...');
+      await this.removePoorPerformers();
+
+      // Step 2: Re-score ALL remaining wallets
       logger.info('Re-scoring all wallets...');
       const rescored = await this.scorer.scoreAllWallets();
 
-      // Step 2: Detect and remove burned wallets
+      // Step 3: Detect and remove burned wallets
       logger.info('Detecting crowded/burned wallets...');
       await this.detectBurnedWallets();
 
-      // Step 3: Update watchlist based on new scores
+      // Step 4: Update watchlist based on new scores
       logger.info('Updating watchlist...');
       await this.updateWatchlist(rescored);
 
-      // Step 4: Clean up inactive wallets
+      // Step 5: Clean up inactive wallets
       logger.info('Removing inactive wallets...');
       await this.removeInactiveWallets();
+
+      // Step 6: Keep only top performers (max 100 wallets)
+      logger.info('Pruning to top performers...');
+      await this.pruneToTopPerformers();
 
       logger.info('✅ Weekly maintenance complete', {
         watchlistSize: this.watchlist.size,
@@ -110,6 +118,97 @@ export class WalletManager {
 
     } catch (error: any) {
       logger.error('Error in weekly maintenance', { error: error.message });
+    }
+  }
+
+  /**
+   * Remove wallets with consistently poor performance
+   * Criteria for removal:
+   * - Win rate < 10% with 5+ tokens entered (proven bad picker)
+   * - No wins after 10+ tokens (unable to find winners)
+   * - Average peak multiplier < 1.2x with 5+ tokens (not finding good entries)
+   */
+  private async removePoorPerformers(): Promise<void> {
+    try {
+      // Find wallets that meet removal criteria
+      const poorPerformers = await query<{ address: string; reason: string }>(
+        `SELECT address,
+          CASE
+            WHEN tokens_entered >= 5 AND win_rate < 0.10 THEN 'Win rate below 10%'
+            WHEN tokens_entered >= 10 AND tokens_won = 0 THEN 'No wins after 10+ tokens'
+            WHEN tokens_entered >= 5 AND avg_peak_multiplier < 1.2 THEN 'Avg peak below 1.2x'
+            ELSE 'Poor performance'
+          END as reason
+         FROM smart_wallets
+         WHERE is_active = true
+         AND (
+           (tokens_entered >= 5 AND win_rate < 0.10)
+           OR (tokens_entered >= 10 AND COALESCE(tokens_won, 0) = 0)
+           OR (tokens_entered >= 5 AND COALESCE(avg_peak_multiplier, 0) < 1.2)
+         )`
+      );
+
+      if (poorPerformers.rows.length === 0) {
+        logger.info('No poor performers to remove');
+        return;
+      }
+
+      logger.info(`Found ${poorPerformers.rows.length} poor performing wallets to remove`);
+
+      for (const wallet of poorPerformers.rows) {
+        // Mark as inactive (soft delete)
+        await query(
+          `UPDATE smart_wallets SET is_active = false, notes = $2, updated_at = NOW() WHERE address = $1`,
+          [wallet.address, `Removed: ${wallet.reason}`]
+        );
+
+        // Remove from watchlist
+        this.watchlist.delete(wallet.address);
+
+        logger.info(`Removed wallet ${wallet.address.slice(0, 8)}...: ${wallet.reason}`);
+      }
+
+      logger.info(`✅ Removed ${poorPerformers.rows.length} poor performing wallets`);
+
+    } catch (error: any) {
+      logger.error('Error removing poor performers', { error: error.message });
+    }
+  }
+
+  /**
+   * Keep only top 100 wallets by score, deactivate the rest
+   */
+  private async pruneToTopPerformers(): Promise<void> {
+    try {
+      // Get count of active wallets
+      const countResult = await query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM smart_wallets WHERE is_active = true`
+      );
+
+      const totalActive = parseInt(countResult.rows[0]?.count || '0');
+
+      if (totalActive <= 100) {
+        logger.debug(`Only ${totalActive} active wallets, no pruning needed`);
+        return;
+      }
+
+      // Deactivate wallets outside top 100 by score
+      const pruneResult = await query(
+        `UPDATE smart_wallets
+         SET is_active = false, notes = 'Pruned: Outside top 100', updated_at = NOW()
+         WHERE address IN (
+           SELECT address FROM smart_wallets
+           WHERE is_active = true
+           ORDER BY score DESC
+           OFFSET 100
+         )`
+      );
+
+      const prunedCount = totalActive - 100;
+      logger.info(`Pruned ${prunedCount} wallets to keep top 100 performers`);
+
+    } catch (error: any) {
+      logger.error('Error pruning to top performers', { error: error.message });
     }
   }
 

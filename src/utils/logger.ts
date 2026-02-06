@@ -110,6 +110,27 @@ class PostgresTransport extends Transport {
     } else if (message.includes('[EXECUTION]')) {
       category = 'execution';
       message = message.replace('[EXECUTION] ', '');
+    } else if (message.includes('[THINKING]')) {
+      category = 'thinking';
+      message = message.replace(/\[THINKING\] \[[^\]]+\] /, '');
+    } else if (message.includes('[DECISION]')) {
+      category = 'decision';
+      message = message.replace('[DECISION] ', '');
+    } else if (message.includes('[ANALYSIS]')) {
+      category = 'analysis';
+      message = message.replace('[ANALYSIS] ', '');
+    } else if (message.includes('[SCORING]')) {
+      category = 'scoring';
+      message = message.replace('[SCORING] ', '');
+    } else if (message.includes('[CHECKPOINT]')) {
+      category = 'checkpoint';
+      message = message.replace('[CHECKPOINT] ', '');
+    } else if (message.includes('[STEP')) {
+      category = 'step';
+      message = message.replace(/\[STEP \d+\/\d+\] /, '');
+    } else if (message.includes('[CALC]')) {
+      category = 'calculation';
+      message = message.replace('[CALC] ', '');
     }
 
     // Extract data from info (excluding winston metadata)
@@ -217,6 +238,58 @@ export const logRPCFailover = (from: string, to: string, error?: any) => {
 
 export const logKillSwitch = (reason: string, data: any) => {
   logger.error(`[KILL_SWITCH] ${reason}`, { data, timestamp: new Date().toISOString() });
+};
+
+// NEW: Detailed thinking/reasoning logs for real-time visibility
+export const logThinking = (category: string, thought: string, data?: any) => {
+  logger.info(`[THINKING] [${category}] ${thought}`, {
+    thinking: data,
+    category,
+    timestamp: new Date().toISOString()
+  });
+};
+
+export const logDecision = (decision: string, reasoning: string, data?: any) => {
+  logger.info(`[DECISION] ${decision} | Reasoning: ${reasoning}`, {
+    decision: data,
+    timestamp: new Date().toISOString()
+  });
+};
+
+export const logAnalysis = (step: string, result: string, data?: any) => {
+  logger.info(`[ANALYSIS] ${step}: ${result}`, {
+    analysis: data,
+    timestamp: new Date().toISOString()
+  });
+};
+
+export const logScoring = (component: string, score: number, maxScore: number, details: string) => {
+  logger.info(`[SCORING] ${component}: ${score}/${maxScore} | ${details}`, {
+    scoring: { component, score, maxScore, details },
+    timestamp: new Date().toISOString()
+  });
+};
+
+export const logCheckpoint = (checkpoint: string, status: 'PASS' | 'FAIL' | 'WARN', reason?: string) => {
+  const icon = status === 'PASS' ? '✓' : status === 'FAIL' ? '✗' : '⚠';
+  logger.info(`[CHECKPOINT] ${icon} ${checkpoint}: ${status}${reason ? ` | ${reason}` : ''}`, {
+    checkpoint: { name: checkpoint, status, reason },
+    timestamp: new Date().toISOString()
+  });
+};
+
+export const logStep = (stepNumber: number, totalSteps: number, description: string) => {
+  logger.info(`[STEP ${stepNumber}/${totalSteps}] ${description}`, {
+    step: { current: stepNumber, total: totalSteps, description },
+    timestamp: new Date().toISOString()
+  });
+};
+
+export const logCalculation = (calculation: string, inputs: Record<string, any>, result: any) => {
+  logger.info(`[CALC] ${calculation} = ${JSON.stringify(result)}`, {
+    calculation: { name: calculation, inputs, result },
+    timestamp: new Date().toISOString()
+  });
 };
 
 // Export default logger

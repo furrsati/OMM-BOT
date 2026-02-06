@@ -17,7 +17,7 @@ const router = Router();
 
 /**
  * GET /api/smart-wallets
- * Get all tracked smart wallets
+ * Get all tracked smart wallets with performance metrics
  */
 router.get(
   '/',
@@ -31,6 +31,10 @@ router.get(
         win_rate,
         average_return,
         tokens_entered,
+        COALESCE(tokens_won, 0) as tokens_won,
+        COALESCE(avg_peak_multiplier, 0) as avg_peak_multiplier,
+        COALESCE(best_pick_multiplier, 0) as best_pick_multiplier,
+        COALESCE(recent_tokens, '[]'::jsonb) as recent_tokens,
         last_active,
         is_active,
         is_crowded,
@@ -46,13 +50,21 @@ router.get(
       address: row.address,
       tier: row.tier,
       score: parseFloat(row.score) || 0,
+      // Win rate: tokens that hit 2x+ / total tokens
       winRate: parseFloat(row.win_rate) || 0,
-      avgReturn: parseFloat(row.average_return) || 0,
-      totalTrades: row.tokens_entered || 0,
+      // Average peak multiplier achieved
+      avgReturn: parseFloat(row.avg_peak_multiplier) || parseFloat(row.average_return) || 0,
+      // Total tokens this wallet entered early
+      tokensEntered: row.tokens_entered || 0,
+      // Tokens that hit 2x+
+      tokensWon: row.tokens_won || 0,
+      // Best single pick multiplier
+      bestPick: parseFloat(row.best_pick_multiplier) || 0,
+      // Recent token entries with results
+      recentTokens: row.recent_tokens || [],
       lastActive: row.last_active,
       isCrowded: row.is_crowded || false,
       notes: row.notes,
-      metrics: row.metrics || {},
       addedAt: row.created_at,
     }));
 
@@ -331,6 +343,35 @@ router.post(
       success: true,
       data: results,
       message: `Imported ${results.imported} wallets, skipped ${results.skipped} existing`,
+    });
+  })
+);
+
+/**
+ * POST /api/smart-wallets/backfill
+ * Trigger backfill of discovery data for existing wallets
+ */
+router.post(
+  '/backfill',
+  requireAuth,
+  auditLog('SMART_WALLET_BACKFILL'),
+  asyncHandler(async (req: any, res: any) => {
+    // Import dynamically to avoid circular dependencies
+    const { Connection } = await import('@solana/web3.js');
+    const { WalletScanner } = await import('../../discovery/wallet-scanner');
+
+    const rpcUrl = process.env.SOLANA_RPC_PRIMARY || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    const scanner = new WalletScanner(connection);
+
+    // Run backfill in background
+    scanner.backfillExistingWallets().catch((error: any) => {
+      console.error('Backfill error:', error);
+    });
+
+    res.json({
+      success: true,
+      message: 'Backfill started in background. Check logs for progress.',
     });
   })
 );

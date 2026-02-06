@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware';
 import { getPool } from '../../db/postgres';
+import { logThinking, logStep, logCheckpoint, logScoring, logDecision, logAnalysis, logCalculation } from '../../utils/logger';
 
 const router = Router();
 
@@ -226,6 +227,114 @@ router.get(
     res.json({
       success: true,
       data: categories,
+    });
+  })
+);
+
+/**
+ * POST /api/logs/test
+ * Generate test logs to verify logging system is working
+ * This simulates what the bot logs during token analysis
+ */
+router.post(
+  '/test',
+  asyncHandler(async (_req: any, res: any) => {
+    const testToken = 'TEST' + Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    // Simulate a complete token analysis flow with detailed logging
+    logStep(1, 5, `[TEST] Starting safety analysis for ${testToken}...`);
+    logThinking('SAFETY', `[TEST] Analyzing token ${testToken} for honeypots, authorities, and holder concentration`);
+
+    await new Promise(r => setTimeout(r, 100));
+
+    logCheckpoint('Blacklist Check', 'PASS', '[TEST] Token not on blacklist');
+    logCheckpoint('Mint Authority', 'PASS', '[TEST] No mint authority or revoked');
+    logCheckpoint('Freeze Authority', 'PASS', '[TEST] No freeze authority or revoked');
+    logCheckpoint('Holder Concentration', 'PASS', '[TEST] Top holder owns 8.5% (< 30%)');
+    logCheckpoint('Honeypot Detection', 'PASS', '[TEST] Sell simulation successful (tax: 2.5%)');
+
+    await new Promise(r => setTimeout(r, 100));
+
+    logStep(2, 5, `[TEST] Calculating safety scores...`);
+    logScoring('Contract/Authority', 28, 30, '[TEST] MintAuth: NO, FreezeAuth: NO');
+    logScoring('Holder Distribution', 22, 25, '[TEST] TopHolder: 8.5%, Top10: 35.2%');
+    logScoring('Honeypot Safety', 23, 25, '[TEST] CanSell: YES, SellTax: 2.5%, BuyTax: 1.0%');
+    logScoring('Liquidity', 18, 20, '[TEST] Depth: $125,000, Locked: YES');
+
+    await new Promise(r => setTimeout(r, 100));
+
+    logStep(3, 5, `[TEST] Calculating conviction score...`);
+    logThinking('WEIGHTS', '[TEST] Loading category weights from Learning Engine', {
+      smartWallet: '30%',
+      tokenSafety: '25%',
+      marketConditions: '15%',
+      socialSignals: '10%',
+      entryQuality: '20%'
+    });
+
+    logScoring('Smart Wallet', 75, 100, '[TEST] Tier1: 2, Tier2: 3, Tier3: 1, AvgScore: 72');
+    logScoring('Token Safety', 91, 100, '[TEST] HardRejected: false, Level: SAFE');
+    logScoring('Market Conditions', 85, 100, '[TEST] Regime: FULL, SOL 24h: +3.5%, PeakHours: true');
+    logScoring('Social Signals', 60, 100, '[TEST] Twitter: true, Telegram: true, Followers: 5200');
+    logScoring('Entry Quality', 78, 100, '[TEST] DipDepth: 25%, FromATH: 32%, Phase: DISCOVERY');
+
+    await new Promise(r => setTimeout(r, 100));
+
+    logCalculation('[TEST] Weighted Contributions', {
+      smartWallet: '75 × 0.30 = 22.5',
+      safety: '91 × 0.25 = 22.75',
+      market: '85 × 0.15 = 12.75',
+      social: '60 × 0.10 = 6.0',
+      entry: '78 × 0.20 = 15.6'
+    }, '79.6');
+
+    logThinking('BASE_SCORE', '[TEST] Sum of weighted contributions = 79.6');
+    logThinking('PATTERN_MATCH', '[TEST] Pattern matching adjustment: +3 (based on similar past trades)');
+    logThinking('REGIME_ADJ', '[TEST] Market regime adjustment: 0 (regime: FULL)');
+
+    logCalculation('[TEST] Final Score', {
+      baseScore: '79.6',
+      patternAdj: '+3',
+      regimeAdj: '0'
+    }, '82.6');
+
+    await new Promise(r => setTimeout(r, 100));
+
+    logStep(4, 5, `[TEST] Making entry decision...`);
+    logCheckpoint('Hard Reject Rules', 'PASS', '[TEST] No hard rejects triggered');
+    logCheckpoint('Daily Loss Limit', 'PASS', '[TEST] Daily P&L 2.5% > -8%');
+    logCheckpoint('Max Positions', 'PASS', '[TEST] 2 < 5 positions');
+    logCheckpoint('Cooldown Period', 'PASS', '[TEST] No cooldown active');
+    logCheckpoint('Conviction Threshold', 'PASS', '[TEST] Score 82.6 meets MEDIUM threshold (70+)');
+    logCheckpoint('Portfolio Exposure', 'PASS', '[TEST] 8% <= 20%');
+
+    await new Promise(r => setTimeout(r, 100));
+
+    logStep(5, 5, `[TEST] Final decision...`);
+    logDecision('APPROVED FOR ENTRY', '[TEST] All checks passed', {
+      token: testToken,
+      conviction: '82.6',
+      level: 'MEDIUM',
+      positionSize: '2.5%'
+    });
+
+    logThinking('SUMMARY', `[TEST] Entry approved: ${testToken} | Conviction: 82.6 (MEDIUM) | Position: 2.5%`);
+
+    logAnalysis('COMPLETE', `[TEST] Token ${testToken} analysis complete - QUALIFIED`, {
+      safetyScore: 91,
+      convictionScore: 82.6,
+      decision: 'APPROVED',
+      positionSize: '2.5%'
+    });
+
+    res.json({
+      success: true,
+      message: 'Test logs generated successfully. Check the Activity Logs page to see them.',
+      data: {
+        testToken,
+        logsGenerated: 25,
+        categories: ['step', 'thinking', 'checkpoint', 'scoring', 'calculation', 'decision', 'analysis']
+      }
     });
   })
 );

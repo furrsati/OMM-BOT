@@ -18,7 +18,7 @@
  * actually predicts winning trades.
  */
 
-import { logger } from '../utils/logger';
+import { logger, logThinking, logScoring, logStep, logCalculation, logDecision } from '../utils/logger';
 import { AggregatedSignal } from './signal-aggregator';
 import { WeightOptimizer } from '../learning/weight-optimizer';
 import { PatternMatcher } from '../learning/pattern-matcher';
@@ -77,25 +77,65 @@ export class ConvictionScorer {
    * Calculate conviction score from aggregated signals
    */
   async calculateConviction(signal: AggregatedSignal): Promise<ConvictionScore> {
-    logger.info(`📊 Calculating conviction for ${signal.tokenAddress.slice(0, 8)}...`);
+    const tokenShort = signal.tokenAddress.slice(0, 8);
+    logStep(1, 7, `Starting conviction calculation for ${tokenShort}...`);
 
     try {
-      // Get current category weights (may have been adjusted by Learning Engine)
+      // Step 1: Get current category weights (may have been adjusted by Learning Engine)
       const weights = await this.weightOptimizer.getCurrentWeights();
+      logThinking('WEIGHTS', `Loading category weights from Learning Engine`, {
+        smartWallet: `${(weights.smartWallet * 100).toFixed(0)}%`,
+        tokenSafety: `${(weights.tokenSafety * 100).toFixed(0)}%`,
+        marketConditions: `${(weights.marketConditions * 100).toFixed(0)}%`,
+        socialSignals: `${(weights.socialSignals * 100).toFixed(0)}%`,
+        entryQuality: `${(weights.entryQuality * 100).toFixed(0)}%`
+      });
 
-      // Calculate component scores (0-100 for each category)
+      // Step 2: Calculate component scores (0-100 for each category)
+      logStep(2, 7, `Scoring smart wallet signals...`);
       const smartWalletScore = this.scoreSmartWalletSignal(signal.smartWallet);
-      const safetyScore = this.scoreSafety(signal.safety);
-      const marketScore = this.scoreMarketConditions(signal.marketContext);
-      const socialScore = this.scoreSocialSignals(signal.social);
-      const entryQualityScore = this.scoreEntryQuality(signal.entryQuality);
+      logScoring('Smart Wallet', smartWalletScore, 100,
+        `Tier1: ${signal.smartWallet.tier1Count}, Tier2: ${signal.smartWallet.tier2Count}, Tier3: ${signal.smartWallet.tier3Count}, AvgScore: ${signal.smartWallet.avgWalletScore?.toFixed(0) || 0}`);
 
-      // Apply weights to get contributions
+      logStep(3, 7, `Scoring token safety...`);
+      const safetyScore = this.scoreSafety(signal.safety);
+      logScoring('Token Safety', safetyScore, 100,
+        `HardRejected: ${signal.safety.isHardRejected}, Level: ${signal.safety.safetyLevel || 'N/A'}`);
+
+      logStep(4, 7, `Scoring market conditions...`);
+      const marketScore = this.scoreMarketConditions(signal.marketContext);
+      logScoring('Market Conditions', marketScore, 100,
+        `Regime: ${signal.marketContext.regime}, SOL 24h: ${signal.marketContext.solChange24h?.toFixed(2) || 0}%, PeakHours: ${signal.marketContext.isPeakHours}`);
+
+      const socialScore = this.scoreSocialSignals(signal.social);
+      logScoring('Social Signals', socialScore, 100,
+        `Twitter: ${signal.social.hasTwitter}, Telegram: ${signal.social.hasTelegram}, Followers: ${signal.social.twitterFollowers || 0}, Coordinated: ${signal.social.isCoordinated}`);
+
+      const entryQualityScore = this.scoreEntryQuality(signal.entryQuality);
+      logScoring('Entry Quality', entryQualityScore, 100,
+        `DipDepth: ${signal.entryQuality.dipDepthPercent?.toFixed(1) || 0}%, FromATH: ${signal.entryQuality.distanceFromATHPercent?.toFixed(1) || 0}%, Phase: ${signal.entryQuality.hypePhase || 'UNKNOWN'}`);
+
+      // Step 5: Apply weights to get contributions
+      logStep(5, 7, `Applying weights to component scores...`);
       const smartWalletContribution = smartWalletScore * weights.smartWallet;
       const safetyContribution = safetyScore * weights.tokenSafety;
       const marketContribution = marketScore * weights.marketConditions;
       const socialContribution = socialScore * weights.socialSignals;
       const entryQualityContribution = entryQualityScore * weights.entryQuality;
+
+      logCalculation('Weighted Contributions', {
+        smartWallet: `${smartWalletScore} × ${weights.smartWallet}`,
+        safety: `${safetyScore} × ${weights.tokenSafety}`,
+        market: `${marketScore} × ${weights.marketConditions}`,
+        social: `${socialScore} × ${weights.socialSignals}`,
+        entry: `${entryQualityScore} × ${weights.entryQuality}`
+      }, {
+        smartWallet: smartWalletContribution.toFixed(1),
+        safety: safetyContribution.toFixed(1),
+        market: marketContribution.toFixed(1),
+        social: socialContribution.toFixed(1),
+        entry: entryQualityContribution.toFixed(1)
+      });
 
       // Calculate base score (sum of weighted contributions)
       const baseScore =
@@ -105,20 +145,37 @@ export class ConvictionScorer {
         socialContribution +
         entryQualityContribution;
 
-      // Apply pattern matching adjustment from Learning Engine
-      const patternMatchAdjustment = await this.getPatternMatchAdjustment(signal);
+      logThinking('BASE_SCORE', `Sum of weighted contributions = ${baseScore.toFixed(1)}`);
 
-      // Apply market regime adjustment
+      // Step 6: Apply adjustments from Learning Engine
+      logStep(6, 7, `Applying Learning Engine adjustments...`);
+      const patternMatchAdjustment = await this.getPatternMatchAdjustment(signal);
+      logThinking('PATTERN_MATCH', `Pattern matching adjustment: ${patternMatchAdjustment > 0 ? '+' : ''}${patternMatchAdjustment} (based on similar past trades)`);
+
       const regimeAdjustment = this.getRegimeAdjustment(signal.marketContext.regime);
+      logThinking('REGIME_ADJ', `Market regime adjustment: ${regimeAdjustment} (regime: ${signal.marketContext.regime})`);
 
       // Calculate final score
       let totalScore = baseScore + patternMatchAdjustment + regimeAdjustment;
       totalScore = Math.max(0, Math.min(100, totalScore)); // Clamp to 0-100
 
-      // Determine conviction level and position sizing
+      logCalculation('Final Score', {
+        baseScore: baseScore.toFixed(1),
+        patternAdj: patternMatchAdjustment,
+        regimeAdj: regimeAdjustment
+      }, totalScore.toFixed(1));
+
+      // Step 7: Determine conviction level and position sizing
+      logStep(7, 7, `Determining conviction level and position size...`);
       const { convictionLevel, positionPercent, shouldEnter } = this.determineConvictionLevel(
         totalScore,
         signal.marketContext.regime
+      );
+
+      logDecision(
+        shouldEnter ? `QUALIFIED FOR ENTRY` : `NOT QUALIFIED`,
+        `Score ${totalScore.toFixed(1)} → ${convictionLevel} conviction`,
+        { convictionLevel, positionPercent: `${positionPercent}%`, shouldEnter }
       );
 
       // Generate reasoning
@@ -151,10 +208,13 @@ export class ConvictionScorer {
         reasoning
       };
 
-      logger.info(`✅ Conviction calculated: ${totalScore.toFixed(1)} (${convictionLevel})`, {
-        token: signal.tokenAddress.slice(0, 8),
+      logThinking('SUMMARY', `Conviction complete: ${totalScore.toFixed(1)} (${convictionLevel}) | Position: ${positionPercent}% | Enter: ${shouldEnter}`, {
+        token: tokenShort,
+        totalScore,
+        convictionLevel,
+        positionPercent,
         shouldEnter,
-        positionSize: `${positionPercent}%`
+        reasoning
       });
 
       return convictionScore;

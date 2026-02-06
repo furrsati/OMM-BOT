@@ -379,4 +379,114 @@ router.post(
   })
 );
 
+/**
+ * POST /api/scanner/cleanup-aggressive
+ * Run aggressive cleanup to focus on high-quality tokens only
+ * This removes all low-quality tokens immediately
+ */
+router.post(
+  '/cleanup-aggressive',
+  asyncHandler(async (_req: any, res: any) => {
+    const pool = getPool();
+
+    // 1. Mark tokens with low liquidity as DEAD
+    const lowLiquidity = await pool.query(`
+      UPDATE token_opportunities
+      SET status = 'DEAD', rejection_reason = 'Low liquidity (<$5K)'
+      WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+      AND (liquidity_usd IS NULL OR liquidity_usd < 5000)
+    `);
+
+    // 2. Mark tokens with low safety score as DEAD
+    const lowSafety = await pool.query(`
+      UPDATE token_opportunities
+      SET status = 'DEAD', rejection_reason = 'Low safety score (<40)'
+      WHERE status IN ('ANALYZING', 'WATCHING')
+      AND safety_score IS NOT NULL AND safety_score < 40
+    `);
+
+    // 3. Mark tokens with low conviction as DEAD (only if older than 30 min)
+    const lowConviction = await pool.query(`
+      UPDATE token_opportunities
+      SET status = 'DEAD', rejection_reason = 'Low conviction score (<30)'
+      WHERE status IN ('ANALYZING', 'WATCHING')
+      AND conviction_score IS NOT NULL AND conviction_score < 30
+      AND discovered_at < NOW() - INTERVAL '30 minutes'
+    `);
+
+    // 4. Mark tokens with no smart wallet interest as DEAD
+    const noWallets = await pool.query(`
+      UPDATE token_opportunities
+      SET status = 'DEAD', rejection_reason = 'No smart wallet interest'
+      WHERE status IN ('ANALYZING', 'WATCHING')
+      AND (smart_wallet_count IS NULL OR smart_wallet_count = 0)
+      AND discovered_at < NOW() - INTERVAL '30 minutes'
+    `);
+
+    // 5. Mark tokens with price collapse as DEAD
+    const priceCollapse = await pool.query(`
+      UPDATE token_opportunities
+      SET status = 'DEAD', rejection_reason = 'Price collapsed >80%'
+      WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+      AND ath_price > 0 AND current_price > 0
+      AND (current_price / ath_price) < 0.2
+    `);
+
+    // 6. Delete all REJECTED tokens
+    const deletedRejected = await pool.query(`
+      DELETE FROM token_opportunities WHERE status = 'REJECTED'
+    `);
+
+    // 7. Delete all DEAD tokens older than 1 hour
+    const deletedDead = await pool.query(`
+      DELETE FROM token_opportunities
+      WHERE status = 'DEAD' AND discovered_at < NOW() - INTERVAL '1 hour'
+    `);
+
+    // 8. Delete all EXPIRED tokens older than 4 hours
+    const deletedExpired = await pool.query(`
+      DELETE FROM token_opportunities
+      WHERE status = 'EXPIRED' AND discovered_at < NOW() - INTERVAL '4 hours'
+    `);
+
+    // Get remaining count
+    const remaining = await pool.query(`
+      SELECT COUNT(*) as count FROM token_opportunities
+      WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+    `);
+
+    const totalMarkedDead =
+      (lowLiquidity.rowCount || 0) +
+      (lowSafety.rowCount || 0) +
+      (lowConviction.rowCount || 0) +
+      (noWallets.rowCount || 0) +
+      (priceCollapse.rowCount || 0);
+
+    const totalDeleted =
+      (deletedRejected.rowCount || 0) +
+      (deletedDead.rowCount || 0) +
+      (deletedExpired.rowCount || 0);
+
+    res.json({
+      success: true,
+      message: `Aggressive cleanup complete`,
+      stats: {
+        markedDead: totalMarkedDead,
+        deleted: totalDeleted,
+        remaining: remaining.rows[0]?.count || 0,
+        breakdown: {
+          lowLiquidity: lowLiquidity.rowCount || 0,
+          lowSafety: lowSafety.rowCount || 0,
+          lowConviction: lowConviction.rowCount || 0,
+          noWallets: noWallets.rowCount || 0,
+          priceCollapse: priceCollapse.rowCount || 0,
+          deletedRejected: deletedRejected.rowCount || 0,
+          deletedDead: deletedDead.rowCount || 0,
+          deletedExpired: deletedExpired.rowCount || 0
+        }
+      }
+    });
+  })
+);
+
 export default router;
