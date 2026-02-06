@@ -1,6 +1,7 @@
 import { Connection, ConnectionConfig } from '@solana/web3.js';
 import { RPCProvider } from '../types';
 import { logger, logRPCFailover } from '../utils/logger';
+import { rateLimitedRPC } from '../utils/rate-limiter';
 
 export class SolanaRPCManager {
   private providers: RPCProvider[];
@@ -208,9 +209,12 @@ export class SolanaRPCManager {
       if (!connection) continue;
 
       try {
-        // Simple health check: get recent blockhash
+        // Simple health check: get recent blockhash (rate limited to avoid 429s)
         const start = Date.now();
-        await connection.getLatestBlockhash();
+        await rateLimitedRPC(
+          () => connection.getLatestBlockhash(),
+          0  // Low priority - don't compete with trading operations
+        );
         const latency = Date.now() - start;
 
         // If previously unhealthy, mark as healthy again
