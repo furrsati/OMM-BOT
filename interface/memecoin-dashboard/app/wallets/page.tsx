@@ -1,439 +1,245 @@
-'use client';
+"use client"
 
-import { useEffect, useState } from 'react';
-import { Users, Plus, Trash2, RefreshCw, Star, TrendingUp, TrendingDown, Eye, EyeOff, Copy, Check } from 'lucide-react';
-import { API_URL } from '@/lib/api';
+import { useEffect, useState, useCallback } from "react"
+import { cn } from "@/lib/utils"
 
 interface SmartWallet {
-  id: string;
-  address: string;
-  tier: 1 | 2 | 3;
-  score: number;
-  winRate: number;
-  avgReturn: number;
-  totalTrades: number;
-  lastActive: string;
-  isCrowded: boolean;
-  addedAt: string;
-  notes?: string;
+  id: string
+  address: string
+  tier: number
+  score: number
+  winRate: number
+  avgReturn: number
+  tokensEntered: number
+  lastActive: string
+  isCrowded: boolean
 }
 
 export default function WalletsPage() {
-  const [wallets, setWallets] = useState<SmartWallet[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [newWalletAddress, setNewWalletAddress] = useState('');
-  const [newWalletTier, setNewWalletTier] = useState<1 | 2 | 3>(2);
-  const [newWalletNotes, setNewWalletNotes] = useState('');
-  const [addingWallet, setAddingWallet] = useState(false);
-  const [deletingWallet, setDeletingWallet] = useState<string | null>(null);
-  const [showAddresses, setShowAddresses] = useState(false);
-  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
-  const [filterTier, setFilterTier] = useState<0 | 1 | 2 | 3>(0);
+  const [wallets, setWallets] = useState<SmartWallet[]>([])
+  const [loading, setLoading] = useState(true)
+  const [newAddress, setNewAddress] = useState("")
+  const [newTier, setNewTier] = useState(2)
+  const [adding, setAdding] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const fetchWallets = async () => {
+  const fetchWallets = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/smart-wallets`);
-      if (!response.ok) throw new Error('Failed to fetch');
-      const data = await response.json();
-      if (data.success) {
-        setWallets(data.data || []);
+      const res = await fetch("/api/smart-wallets")
+      const data = await res.json()
+      if (data.success && data.data) {
+        setWallets(data.data)
       }
-      setError(null);
     } catch (err) {
-      console.error('Error fetching wallets:', err);
-      setError('Failed to fetch smart wallets');
+      console.error("Failed to fetch wallets:", err)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }, [])
 
   useEffect(() => {
-    fetchWallets();
-  }, []);
+    fetchWallets()
+  }, [fetchWallets])
 
-  const addWallet = async () => {
-    if (!newWalletAddress.trim()) return;
+  const handleAddWallet = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newAddress.trim()) return
 
-    setAddingWallet(true);
+    setAdding(true)
+    setError(null)
     try {
-      const response = await fetch(`${API_URL}/smart-wallets`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          address: newWalletAddress.trim(),
-          tier: newWalletTier,
-          notes: newWalletNotes.trim() || undefined,
-        }),
-      });
-      const data = await response.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to add wallet');
+      const res = await fetch("/api/smart-wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: newAddress, tier: newTier }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setNewAddress("")
+        await fetchWallets()
+      } else {
+        setError(data.error || "Failed to add wallet")
       }
-      await fetchWallets();
-      setShowAddModal(false);
-      setNewWalletAddress('');
-      setNewWalletNotes('');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to add wallet';
-      setError(message);
+      setError("Failed to add wallet")
     } finally {
-      setAddingWallet(false);
+      setAdding(false)
     }
-  };
+  }
 
-  const deleteWallet = async (walletId: string) => {
-    setDeletingWallet(walletId);
+  const handleDeleteWallet = async (id: string) => {
     try {
-      const response = await fetch(`${API_URL}/smart-wallets/${walletId}`, {
-        method: 'DELETE',
-      });
-      const data = await response.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to delete wallet');
+      const res = await fetch(`/api/smart-wallets/${id}`, {
+        method: "DELETE",
+      })
+      const data = await res.json()
+      if (data.success) {
+        await fetchWallets()
       }
-      await fetchWallets();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete wallet';
-      setError(message);
-    } finally {
-      setDeletingWallet(null);
+      console.error("Failed to delete wallet:", err)
     }
-  };
+  }
 
-  const updateWalletTier = async (walletId: string, tier: 1 | 2 | 3) => {
-    try {
-      const response = await fetch(`${API_URL}/smart-wallets/${walletId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier }),
-      });
-      const data = await response.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to update wallet');
-      }
-      await fetchWallets();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to update wallet';
-      setError(message);
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return "-"
+    const date = new Date(dateStr)
+    const now = new Date()
+    const diff = now.getTime() - date.getTime()
+    const hours = Math.floor(diff / (1000 * 60 * 60))
+    if (hours < 24) return `${hours}h ago`
+    const days = Math.floor(hours / 24)
+    return `${days}d ago`
+  }
+
+  const getTierColor = (tier: number) => {
+    switch (tier) {
+      case 1: return "bg-yellow-500/20 text-yellow-400"
+      case 2: return "bg-blue-500/20 text-blue-400"
+      case 3: return "bg-zinc-500/20 text-zinc-400"
+      default: return "bg-zinc-500/20 text-zinc-400"
     }
-  };
-
-  const copyAddress = (address: string) => {
-    navigator.clipboard.writeText(address);
-    setCopiedAddress(address);
-    setTimeout(() => setCopiedAddress(null), 2000);
-  };
-
-  const formatAddress = (address: string, show: boolean) => {
-    if (show) return address;
-    return `${address.slice(0, 4)}...${address.slice(-4)}`;
-  };
-
-  const formatTime = (isoString: string) => {
-    const date = new Date(isoString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 0) return 'Today';
-    if (diffDays === 1) return 'Yesterday';
-    if (diffDays < 7) return `${diffDays} days ago`;
-    return date.toLocaleDateString();
-  };
-
-  const filteredWallets = filterTier === 0
-    ? wallets
-    : wallets.filter(w => w.tier === filterTier);
-
-  const tierCounts = {
-    1: wallets.filter(w => w.tier === 1).length,
-    2: wallets.filter(w => w.tier === 2).length,
-    3: wallets.filter(w => w.tier === 3).length,
-  };
+  }
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-16 w-16 animate-spin rounded-full border-b-2 border-white"></div>
-          <p className="text-zinc-400">Loading smart wallets...</p>
-        </div>
+      <div className="flex items-center justify-center h-[60vh]">
+        <div className="text-zinc-400">Loading...</div>
       </div>
-    );
+    )
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 p-6 text-white">
-      <div className="mx-auto max-w-7xl">
-        {/* Header */}
-        <header className="mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-white">Smart Wallets</h1>
-              <p className="text-zinc-500 mt-1">Manage your alpha wallet watchlist</p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowAddresses(!showAddresses)}
-                className="flex items-center gap-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 px-4 py-2 transition-colors"
-              >
-                {showAddresses ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                {showAddresses ? 'Hide' : 'Show'} Addresses
-              </button>
-              <button
-                onClick={fetchWallets}
-                className="flex items-center gap-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 px-4 py-2 transition-colors"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Refresh
-              </button>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="flex items-center gap-2 rounded-lg bg-green-600 hover:bg-green-700 px-4 py-2 transition-colors"
-              >
-                <Plus className="h-4 w-4" />
-                Add Wallet
-              </button>
-            </div>
-          </div>
-        </header>
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold text-white">Smart Wallets</h1>
 
-        {error && (
-          <div className="mb-6 rounded-lg bg-red-500/10 border border-red-500/20 p-4">
-            <p className="text-red-400">{error}</p>
-          </div>
-        )}
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 text-red-400">
+          {error}
+          <button onClick={() => setError(null)} className="ml-4 text-sm underline">
+            Dismiss
+          </button>
+        </div>
+      )}
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <h3 className="text-sm font-medium text-zinc-400 mb-2">Total Wallets</h3>
-            <p className="text-2xl font-bold text-white">{wallets.length}</p>
-          </div>
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <h3 className="text-sm font-medium text-zinc-400 mb-2">Tier 1 (Elite)</h3>
-            <p className="text-2xl font-bold text-green-400">{tierCounts[1]}</p>
-          </div>
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <h3 className="text-sm font-medium text-zinc-400 mb-2">Tier 2 (Strong)</h3>
-            <p className="text-2xl font-bold text-yellow-400">{tierCounts[2]}</p>
-          </div>
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <h3 className="text-sm font-medium text-zinc-400 mb-2">Tier 3 (Promising)</h3>
-            <p className="text-2xl font-bold text-zinc-400">{tierCounts[3]}</p>
+      {/* Add Wallet Form */}
+      <form onSubmit={handleAddWallet} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+        <div className="flex flex-wrap gap-4">
+          <input
+            type="text"
+            value={newAddress}
+            onChange={(e) => setNewAddress(e.target.value)}
+            placeholder="Wallet address..."
+            className="flex-1 min-w-[300px] px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-600"
+          />
+          <select
+            value={newTier}
+            onChange={(e) => setNewTier(Number(e.target.value))}
+            className="px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-zinc-600"
+          >
+            <option value={1}>Tier 1</option>
+            <option value={2}>Tier 2</option>
+            <option value={3}>Tier 3</option>
+          </select>
+          <button
+            type="submit"
+            disabled={adding || !newAddress.trim()}
+            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+          >
+            {adding ? "Adding..." : "Add Wallet"}
+          </button>
+        </div>
+      </form>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="text-sm text-zinc-400">Total Wallets</div>
+          <div className="text-2xl font-bold text-white">{wallets.length}</div>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="text-sm text-zinc-400">Tier 1</div>
+          <div className="text-2xl font-bold text-yellow-400">
+            {wallets.filter(w => w.tier === 1).length}
           </div>
         </div>
-
-        {/* Filter */}
-        <div className="flex gap-2 mb-6">
-          {[0, 1, 2, 3].map((tier) => (
-            <button
-              key={tier}
-              onClick={() => setFilterTier(tier as 0 | 1 | 2 | 3)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                filterTier === tier
-                  ? tier === 0 ? 'bg-zinc-700 text-white' :
-                    tier === 1 ? 'bg-green-600 text-white' :
-                    tier === 2 ? 'bg-yellow-600 text-white' :
-                    'bg-zinc-600 text-white'
-                  : 'bg-zinc-800 text-zinc-400 hover:text-white'
-              }`}
-            >
-              {tier === 0 ? 'All' : `Tier ${tier}`}
-            </button>
-          ))}
-        </div>
-
-        {/* Wallets List */}
-        {filteredWallets.length === 0 ? (
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-12 text-center">
-            <Users className="h-12 w-12 text-zinc-600 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-zinc-300 mb-2">No Smart Wallets</h3>
-            <p className="text-zinc-500 mb-4">Add wallets to start tracking alpha signals.</p>
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-green-600 hover:bg-green-700 px-4 py-2 transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              Add Your First Wallet
-            </button>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="text-sm text-zinc-400">Avg Win Rate</div>
+          <div className="text-2xl font-bold text-white">
+            {wallets.length > 0
+              ? (wallets.reduce((sum, w) => sum + w.winRate, 0) / wallets.length).toFixed(1)
+              : 0}%
           </div>
+        </div>
+      </div>
+
+      {/* Wallets Table */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        {wallets.length === 0 ? (
+          <div className="text-zinc-500 text-center py-12">No smart wallets tracked</div>
         ) : (
-          <div className="space-y-4">
-            {filteredWallets.map((wallet) => (
-              <div
-                key={wallet.id}
-                className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 hover:bg-zinc-900/70 transition-colors"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="flex items-center gap-1">
-                        {[1, 2, 3].map((t) => (
-                          <button
-                            key={t}
-                            onClick={() => updateWalletTier(wallet.id, t as 1 | 2 | 3)}
-                            className={`transition-colors ${
-                              t <= wallet.tier
-                                ? wallet.tier === 1 ? 'text-green-400' :
-                                  wallet.tier === 2 ? 'text-yellow-400' :
-                                  'text-zinc-400'
-                                : 'text-zinc-700 hover:text-zinc-500'
-                            }`}
-                          >
-                            <Star className="h-4 w-4" fill={t <= wallet.tier ? 'currentColor' : 'none'} />
-                          </button>
-                        ))}
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-zinc-800 text-left text-sm text-zinc-400">
+                  <th className="px-4 py-3 font-medium">Address</th>
+                  <th className="px-4 py-3 font-medium">Tier</th>
+                  <th className="px-4 py-3 font-medium">Score</th>
+                  <th className="px-4 py-3 font-medium">Win Rate</th>
+                  <th className="px-4 py-3 font-medium">Avg Return</th>
+                  <th className="px-4 py-3 font-medium">Tokens</th>
+                  <th className="px-4 py-3 font-medium">Last Active</th>
+                  <th className="px-4 py-3 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {wallets.map((wallet) => (
+                  <tr key={wallet.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm text-white">
+                          {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
+                        </span>
+                        {wallet.isCrowded && (
+                          <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-xs rounded">
+                            Crowded
+                          </span>
+                        )}
                       </div>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                        wallet.tier === 1 ? 'bg-green-500/20 text-green-400' :
-                        wallet.tier === 2 ? 'bg-yellow-500/20 text-yellow-400' :
-                        'bg-zinc-500/20 text-zinc-400'
-                      }`}>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={cn("px-2 py-1 rounded text-xs font-medium", getTierColor(wallet.tier))}>
                         Tier {wallet.tier}
                       </span>
-                      {wallet.isCrowded && (
-                        <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400">
-                          Crowded
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 mb-3">
-                      <code className="text-sm text-zinc-300 font-mono">
-                        {formatAddress(wallet.address, showAddresses)}
-                      </code>
+                    </td>
+                    <td className="px-4 py-3 text-zinc-300">{wallet.score}</td>
+                    <td className="px-4 py-3 text-zinc-300">{wallet.winRate.toFixed(1)}%</td>
+                    <td className="px-4 py-3">
+                      <span className={cn(
+                        wallet.avgReturn >= 0 ? "text-green-400" : "text-red-400"
+                      )}>
+                        {wallet.avgReturn >= 0 ? "+" : ""}{wallet.avgReturn.toFixed(1)}%
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-zinc-300">{wallet.tokensEntered}</td>
+                    <td className="px-4 py-3 text-sm text-zinc-400">
+                      {formatDate(wallet.lastActive)}
+                    </td>
+                    <td className="px-4 py-3">
                       <button
-                        onClick={() => copyAddress(wallet.address)}
-                        className="text-zinc-500 hover:text-white transition-colors"
+                        onClick={() => handleDeleteWallet(wallet.id)}
+                        className="px-3 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded text-sm transition-colors"
                       >
-                        {copiedAddress === wallet.address ? (
-                          <Check className="h-4 w-4 text-green-400" />
-                        ) : (
-                          <Copy className="h-4 w-4" />
-                        )}
+                        Remove
                       </button>
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
-                      <div>
-                        <p className="text-zinc-500">Score</p>
-                        <p className="font-medium text-white">{wallet.score}</p>
-                      </div>
-                      <div>
-                        <p className="text-zinc-500">Win Rate</p>
-                        <p className={`font-medium ${wallet.winRate >= 0.5 ? 'text-green-400' : 'text-yellow-400'}`}>
-                          {(wallet.winRate * 100).toFixed(1)}%
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-zinc-500">Avg Return</p>
-                        <p className={`font-medium flex items-center gap-1 ${wallet.avgReturn >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {wallet.avgReturn >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                          {wallet.avgReturn >= 0 ? '+' : ''}{(wallet.avgReturn * 100).toFixed(1)}%
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-zinc-500">Trades</p>
-                        <p className="font-medium text-white">{wallet.totalTrades}</p>
-                      </div>
-                      <div>
-                        <p className="text-zinc-500">Last Active</p>
-                        <p className="font-medium text-zinc-300">{formatTime(wallet.lastActive)}</p>
-                      </div>
-                    </div>
-                    {wallet.notes && (
-                      <p className="text-xs text-zinc-500 mt-2 italic">{wallet.notes}</p>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => deleteWallet(wallet.id)}
-                    disabled={deletingWallet === wallet.id}
-                    className="text-zinc-500 hover:text-red-400 transition-colors p-2"
-                  >
-                    {deletingWallet === wallet.id ? (
-                      <RefreshCw className="h-5 w-5 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-5 w-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add Wallet Modal */}
-        {showAddModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-6 w-full max-w-md mx-4">
-              <h2 className="text-xl font-bold mb-4">Add Smart Wallet</h2>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm text-zinc-400 mb-2">Wallet Address</label>
-                  <input
-                    type="text"
-                    value={newWalletAddress}
-                    onChange={(e) => setNewWalletAddress(e.target.value)}
-                    placeholder="Enter Solana wallet address..."
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-zinc-400 mb-2">Tier</label>
-                  <div className="flex gap-2">
-                    {[1, 2, 3].map((tier) => (
-                      <button
-                        key={tier}
-                        onClick={() => setNewWalletTier(tier as 1 | 2 | 3)}
-                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                          newWalletTier === tier
-                            ? tier === 1 ? 'bg-green-600 text-white' :
-                              tier === 2 ? 'bg-yellow-600 text-white' :
-                              'bg-zinc-600 text-white'
-                            : 'bg-zinc-800 text-zinc-400 hover:text-white'
-                        }`}
-                      >
-                        Tier {tier}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm text-zinc-400 mb-2">Notes (optional)</label>
-                  <input
-                    type="text"
-                    value={newWalletNotes}
-                    onChange={(e) => setNewWalletNotes(e.target.value)}
-                    placeholder="Add notes about this wallet..."
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-600"
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setShowAddModal(false)}
-                  className="flex-1 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={addWallet}
-                  disabled={!newWalletAddress.trim() || addingWallet}
-                  className="flex-1 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:bg-green-800 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-                >
-                  {addingWallet && <RefreshCw className="h-4 w-4 animate-spin" />}
-                  Add Wallet
-                </button>
-              </div>
-            </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
     </div>
-  );
+  )
 }

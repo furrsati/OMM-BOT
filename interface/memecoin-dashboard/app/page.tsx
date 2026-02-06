@@ -1,346 +1,389 @@
-'use client';
+"use client"
 
-import { useEffect, useState } from 'react';
-import { API_URL } from '@/lib/api';
+import { useEffect, useState, useCallback } from "react"
+import { cn } from "@/lib/utils"
 
 interface BotStatus {
-  isRunning: boolean;
-  isPaused: boolean;
-  tradingEnabled: boolean;
-  paperTradingMode: boolean;
-  uptime: number;
-  startTime: string;
+  isRunning: boolean
+  isPaused: boolean
+  tradingEnabled: boolean
+  paperTradingMode: boolean
+  uptime: number
+  marketRegime: string
+  dailyPnL: number
+  totalPnL: number
+  winRate: number
+  openPositions: number
+  solPrice: number
+  solChange24h: number
+  btcChange24h: number
 }
 
-interface MarketStatus {
-  regime: string;
-  reason: string;
-  solChange24h: number;
-  btcChange24h: number;
+interface Position {
+  id: string
+  tokenAddress: string
+  tokenName: string
+  tokenSymbol: string
+  entryPrice: number
+  currentPrice: number
+  quantity: number
+  pnl: number
+  pnlPercent: number
+  convictionScore: number
+  smartWalletCount: number
 }
 
-interface TradingStatus {
-  dailyPnL: number;
-  openPositions: number;
-  losingStreak: number;
-  cooldownActive: boolean;
-}
+export default function Dashboard() {
+  const [status, setStatus] = useState<BotStatus | null>(null)
+  const [positions, setPositions] = useState<Position[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
 
-interface PositionsStatus {
-  open: number;
-  totalTrades: number;
-  winRate: number;
-  totalPnL: number;
-}
+  const fetchData = useCallback(async () => {
+    try {
+      const [statusRes, positionsRes] = await Promise.all([
+        fetch("/api/status"),
+        fetch("/api/positions"),
+      ])
 
-interface SystemStats {
-  bot: BotStatus;
-  market: MarketStatus;
-  trading: TradingStatus;
-  positions: PositionsStatus;
-}
+      const statusData = await statusRes.json()
+      const positionsData = await positionsRes.json()
 
-function getStatusDisplay(stats: SystemStats | null): { label: string; color: string } {
-  if (!stats) return { label: 'UNKNOWN', color: 'bg-zinc-500/20 text-zinc-400' };
+      if (statusData.success && statusData.data) {
+        const d = statusData.data
+        setStatus({
+          isRunning: d.bot?.isRunning ?? false,
+          isPaused: d.bot?.isPaused ?? false,
+          tradingEnabled: d.bot?.tradingEnabled ?? false,
+          paperTradingMode: d.bot?.paperTradingMode ?? true,
+          uptime: d.bot?.uptime ?? 0,
+          marketRegime: d.market?.regime ?? "UNKNOWN",
+          dailyPnL: d.trading?.dailyPnL ?? 0,
+          totalPnL: d.performance?.totalPnL ?? 0,
+          winRate: d.performance?.winRate ?? 0,
+          openPositions: d.performance?.openPositions ?? 0,
+          solPrice: d.market?.solPrice ?? 0,
+          solChange24h: d.market?.solChange24h ?? 0,
+          btcChange24h: d.market?.btcChange24h ?? 0,
+        })
+      }
 
-  if (stats.bot.isPaused) {
-    return { label: 'PAUSED', color: 'bg-yellow-500/20 text-yellow-400' };
-  }
-  if (stats.bot.isRunning) {
-    return { label: 'RUNNING', color: 'bg-green-500/20 text-green-400' };
-  }
-  return { label: 'STOPPED', color: 'bg-red-500/20 text-red-400' };
-}
+      if (positionsData.success && positionsData.data) {
+        setPositions(positionsData.data)
+      }
 
-function getRegimeColor(regime: string): string {
-  switch (regime?.toUpperCase()) {
-    case 'FULL':
-      return 'text-green-400';
-    case 'CAUTIOUS':
-      return 'text-yellow-400';
-    case 'DEFENSIVE':
-      return 'text-orange-400';
-    case 'PAUSE':
-      return 'text-red-400';
-    default:
-      return 'text-zinc-400';
-  }
-}
-
-export default function Home() {
-  const [stats, setStats] = useState<SystemStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const [backendUrl, setBackendUrl] = useState<string | null>(null);
+      setError(null)
+    } catch (err) {
+      setError("Failed to fetch data")
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const response = await fetch(`${API_URL}/status`);
-        const data = await response.json();
+    fetchData()
+    const interval = setInterval(fetchData, 5000)
+    return () => clearInterval(interval)
+  }, [fetchData])
 
-        if (data.isOffline) {
-          // Backend is offline - show the error with backend URL
-          setBackendUrl(data.backendUrl || null);
-          throw new Error(data.message || 'Backend API is offline');
-        }
-
-        if (!response.ok) {
-          throw new Error(`API returned ${response.status}`);
-        }
-
-        if (data.success && data.data) {
-          setStats(data.data);
-        }
-        setError(null);
-        setBackendUrl(null);
-      } catch (err: unknown) {
-        const errorMessage = err instanceof Error ? err.message : 'Failed to connect to backend API';
-        console.error('Error fetching stats:', err);
-        setError(errorMessage);
-      } finally {
-        setLoading(false);
+  const handleBotAction = async (action: string) => {
+    setActionLoading(action)
+    try {
+      const res = await fetch(`/api/bot/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+      const data = await res.json()
+      if (data.success) {
+        await fetchData()
+      } else {
+        setError(data.error || `Failed to ${action}`)
       }
-    };
+    } catch (err) {
+      setError(`Failed to ${action}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
 
-    fetchStats();
-    const interval = setInterval(fetchStats, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  const handleClosePosition = async (id: string) => {
+    try {
+      const res = await fetch(`/api/positions/${id}/close`, {
+        method: "POST",
+      })
+      const data = await res.json()
+      if (data.success) {
+        await fetchData()
+      }
+    } catch (err) {
+      setError("Failed to close position")
+    }
+  }
+
+  const handleConfigChange = async (key: string, value: boolean) => {
+    try {
+      const res = await fetch("/api/bot/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: value }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        await fetchData()
+      }
+    } catch (err) {
+      setError("Failed to update config")
+    }
+  }
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-16 w-16 animate-spin rounded-full border-b-2 border-white"></div>
-          <p className="text-zinc-400">Loading dashboard...</p>
-        </div>
+      <div className="flex items-center justify-center h-[60vh]">
+        <div className="text-zinc-400">Loading...</div>
       </div>
-    );
+    )
   }
 
-  if (error) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <div className="text-center max-w-lg">
-          <div className="mb-4 text-6xl">⚠️</div>
-          <h2 className="mb-2 text-xl font-semibold text-red-400">Backend Offline</h2>
-          <p className="text-zinc-400 mb-4">{error}</p>
-          <div className="bg-zinc-800/50 rounded-lg p-4 text-left">
-            <p className="text-sm text-zinc-500 mb-2">Connection Details:</p>
-            <ul className="text-sm text-zinc-400 space-y-2">
-              <li className="flex justify-between">
-                <span>Dashboard API:</span>
-                <code className="text-xs bg-zinc-700 px-1 rounded">{API_URL}</code>
-              </li>
-              {backendUrl && (
-                <li className="flex justify-between">
-                  <span>Backend URL:</span>
-                  <code className="text-xs bg-zinc-700 px-1 rounded">{backendUrl}</code>
-                </li>
-              )}
-            </ul>
-            <hr className="my-3 border-zinc-700" />
-            <p className="text-sm text-zinc-500 mb-2">Troubleshooting:</p>
-            <ul className="text-sm text-zinc-400 list-disc list-inside space-y-1">
-              <li>Check if backend service is running on Render</li>
-              <li>Verify <code className="text-xs bg-zinc-700 px-1 rounded">BOT_API_URL</code> is set in Render env vars</li>
-              <li>Test backend health: <code className="text-xs bg-zinc-700 px-1 rounded">{backendUrl}/health</code></li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    );
+  const getStatusColor = () => {
+    if (!status) return "bg-zinc-600"
+    if (!status.isRunning) return "bg-red-500"
+    if (status.isPaused) return "bg-yellow-500"
+    return "bg-green-500"
   }
 
-  const statusDisplay = getStatusDisplay(stats);
-  const uptime = stats?.bot?.uptime || 0;
-  const uptimeHours = Math.floor(uptime / 3600);
-  const uptimeMinutes = Math.floor((uptime % 3600) / 60);
+  const getStatusText = () => {
+    if (!status) return "Offline"
+    if (!status.isRunning) return "Stopped"
+    if (status.isPaused) return "Paused"
+    return "Running"
+  }
+
+  const getRegimeColor = (regime: string) => {
+    switch (regime) {
+      case "FULL": return "text-green-400"
+      case "CAUTIOUS": return "text-yellow-400"
+      case "DEFENSIVE": return "text-orange-400"
+      case "PAUSE": return "text-red-400"
+      default: return "text-zinc-400"
+    }
+  }
 
   return (
-    <div className="min-h-screen bg-gray-950 p-6 text-white">
-      <div className="mx-auto max-w-7xl">
-        {/* Header */}
-        <header className="mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-white">Dashboard</h1>
-              <p className="text-zinc-500 mt-1">Real-time trading bot overview</p>
-            </div>
-            <div className="flex items-center gap-4">
-              {stats?.bot?.paperTradingMode && (
-                <span className="bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full text-sm font-medium">
-                  Paper Trading
-                </span>
-              )}
-              <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusDisplay.color}`}>
-                {statusDisplay.label}
-              </span>
-            </div>
-          </div>
-        </header>
+    <div className="space-y-6">
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 text-red-400">
+          {error}
+          <button onClick={() => setError(null)} className="ml-4 text-sm underline">
+            Dismiss
+          </button>
+        </div>
+      )}
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {/* Uptime Card */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-zinc-400">Uptime</h3>
-              <span className="text-zinc-600">⏱️</span>
-            </div>
-            <p className="text-2xl font-bold text-white">
-              {uptimeHours}h {uptimeMinutes}m
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">
-              Since {stats?.bot?.startTime ? new Date(stats.bot.startTime).toLocaleTimeString() : 'N/A'}
-            </p>
-          </div>
-
-          {/* Market Regime Card */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-zinc-400">Market Regime</h3>
-              <span className="text-zinc-600">📊</span>
-            </div>
-            <p className={`text-2xl font-bold ${getRegimeColor(stats?.market?.regime || '')}`}>
-              {stats?.market?.regime?.toUpperCase() || 'UNKNOWN'}
-            </p>
-            <p className="text-xs text-zinc-500 mt-1 truncate" title={stats?.market?.reason}>
-              {stats?.market?.reason || 'No data'}
-            </p>
-          </div>
-
-          {/* Open Positions Card */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-zinc-400">Open Positions</h3>
-              <span className="text-zinc-600">📈</span>
-            </div>
-            <p className="text-2xl font-bold text-white">
-              {stats?.positions?.open || 0}
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">
-              Active trades
-            </p>
-          </div>
-
-          {/* Total P&L Card */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-zinc-400">Total P&L</h3>
-              <span className="text-zinc-600">💰</span>
-            </div>
-            <p className={`text-2xl font-bold ${(stats?.positions?.totalPnL || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {(stats?.positions?.totalPnL || 0) >= 0 ? '+' : ''}
-              ${(stats?.positions?.totalPnL || 0).toFixed(2)}
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">All time</p>
-          </div>
-
-          {/* Daily P&L Card */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-zinc-400">Daily P&L</h3>
-              <span className="text-zinc-600">📅</span>
-            </div>
-            <p className={`text-2xl font-bold ${(stats?.trading?.dailyPnL || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {(stats?.trading?.dailyPnL || 0) >= 0 ? '+' : ''}
-              ${(stats?.trading?.dailyPnL || 0).toFixed(2)}
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">Today</p>
-          </div>
-
-          {/* Win Rate Card */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-zinc-400">Win Rate</h3>
-              <span className="text-zinc-600">🎯</span>
-            </div>
-            <p className="text-2xl font-bold text-white">
-              {((stats?.positions?.winRate || 0) * 100).toFixed(1)}%
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">
-              {stats?.positions?.totalTrades || 0} total trades
-            </p>
-          </div>
-
-          {/* SOL Change Card */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-zinc-400">SOL 24h</h3>
-              <span className="text-zinc-600">◎</span>
-            </div>
-            <p className={`text-2xl font-bold ${(stats?.market?.solChange24h || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {(stats?.market?.solChange24h || 0) >= 0 ? '+' : ''}
-              {(stats?.market?.solChange24h || 0).toFixed(2)}%
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">Price change</p>
-          </div>
-
-          {/* BTC Change Card */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-zinc-400">BTC 24h</h3>
-              <span className="text-zinc-600">₿</span>
-            </div>
-            <p className={`text-2xl font-bold ${(stats?.market?.btcChange24h || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {(stats?.market?.btcChange24h || 0) >= 0 ? '+' : ''}
-              {(stats?.market?.btcChange24h || 0).toFixed(2)}%
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">Price change</p>
+      {/* Header with Status */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+          <div className="flex items-center gap-2">
+            <div className={cn("w-3 h-3 rounded-full", getStatusColor())} />
+            <span className="text-zinc-300">{getStatusText()}</span>
           </div>
         </div>
+        <button
+          onClick={() => handleBotAction("kill")}
+          disabled={actionLoading === "kill"}
+          className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+        >
+          {actionLoading === "kill" ? "..." : "KILL SWITCH"}
+        </button>
+      </div>
 
-        {/* Status Indicators */}
-        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {/* Trading Status */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <h3 className="text-sm font-medium text-zinc-400 mb-4">Trading Status</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${stats?.bot?.tradingEnabled ? 'bg-green-400' : 'bg-red-400'}`}></div>
-                <span className="text-sm text-zinc-300">Trading {stats?.bot?.tradingEnabled ? 'Enabled' : 'Disabled'}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${stats?.trading?.cooldownActive ? 'bg-yellow-400' : 'bg-zinc-600'}`}></div>
-                <span className="text-sm text-zinc-300">Cooldown {stats?.trading?.cooldownActive ? 'Active' : 'Inactive'}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${(stats?.trading?.losingStreak || 0) >= 3 ? 'bg-red-400' : 'bg-zinc-600'}`}></div>
-                <span className="text-sm text-zinc-300">Losing Streak: {stats?.trading?.losingStreak || 0}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${stats?.bot?.paperTradingMode ? 'bg-blue-400' : 'bg-zinc-600'}`}></div>
-                <span className="text-sm text-zinc-300">{stats?.bot?.paperTradingMode ? 'Paper Mode' : 'Live Mode'}</span>
-              </div>
-            </div>
+      {/* Bot Controls */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleBotAction("start")}
+              disabled={actionLoading !== null || status?.isRunning}
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+            >
+              {actionLoading === "start" ? "..." : "Start"}
+            </button>
+            <button
+              onClick={() => handleBotAction("stop")}
+              disabled={actionLoading !== null || !status?.isRunning}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+            >
+              {actionLoading === "stop" ? "..." : "Stop"}
+            </button>
+            <button
+              onClick={() => handleBotAction(status?.isPaused ? "resume" : "pause")}
+              disabled={actionLoading !== null || !status?.isRunning}
+              className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+            >
+              {actionLoading === "pause" || actionLoading === "resume"
+                ? "..."
+                : status?.isPaused
+                ? "Resume"
+                : "Pause"}
+            </button>
           </div>
 
-          {/* Connection Status */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <h3 className="text-sm font-medium text-zinc-400 mb-4">Connection Status</h3>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-300">API Connection</span>
-                <span className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-green-400"></div>
-                  <span className="text-sm text-green-400">Connected</span>
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-300">API Endpoint</span>
-                <code className="text-xs bg-zinc-800 px-2 py-1 rounded text-zinc-400">{API_URL}</code>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-300">Auto-refresh</span>
-                <span className="text-sm text-zinc-400">Every 5 seconds</span>
-              </div>
-            </div>
+          <div className="flex items-center gap-4 ml-auto">
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+              <span>Paper Trading:</span>
+              <button
+                onClick={() => handleConfigChange("paperTradingMode", !status?.paperTradingMode)}
+                className={cn(
+                  "relative w-12 h-6 rounded-full transition-colors",
+                  status?.paperTradingMode ? "bg-blue-600" : "bg-zinc-700"
+                )}
+              >
+                <div
+                  className={cn(
+                    "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
+                    status?.paperTradingMode ? "left-7" : "left-1"
+                  )}
+                />
+              </button>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+              <span>Trading:</span>
+              <button
+                onClick={() => handleConfigChange("tradingEnabled", !status?.tradingEnabled)}
+                className={cn(
+                  "relative w-12 h-6 rounded-full transition-colors",
+                  status?.tradingEnabled ? "bg-green-600" : "bg-zinc-700"
+                )}
+              >
+                <div
+                  className={cn(
+                    "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
+                    status?.tradingEnabled ? "left-7" : "left-1"
+                  )}
+                />
+              </button>
+            </label>
           </div>
         </div>
       </div>
+
+      {/* Metrics Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="text-sm text-zinc-400">Daily P&L</div>
+          <div className={cn(
+            "text-2xl font-bold",
+            (status?.dailyPnL ?? 0) >= 0 ? "text-green-400" : "text-red-400"
+          )}>
+            {(status?.dailyPnL ?? 0) >= 0 ? "+" : ""}${(status?.dailyPnL ?? 0).toFixed(2)}
+          </div>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="text-sm text-zinc-400">Total P&L</div>
+          <div className={cn(
+            "text-2xl font-bold",
+            (status?.totalPnL ?? 0) >= 0 ? "text-green-400" : "text-red-400"
+          )}>
+            {(status?.totalPnL ?? 0) >= 0 ? "+" : ""}${(status?.totalPnL ?? 0).toFixed(2)}
+          </div>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="text-sm text-zinc-400">Win Rate</div>
+          <div className="text-2xl font-bold text-white">
+            {(status?.winRate ?? 0).toFixed(1)}%
+          </div>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="text-sm text-zinc-400">Open Positions</div>
+          <div className="text-2xl font-bold text-white">
+            {status?.openPositions ?? positions.length}
+          </div>
+        </div>
+      </div>
+
+      {/* Market Conditions */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+        <div className="flex flex-wrap items-center gap-6">
+          <div>
+            <span className="text-sm text-zinc-400">Regime: </span>
+            <span className={cn("font-medium", getRegimeColor(status?.marketRegime ?? ""))}>
+              {status?.marketRegime ?? "UNKNOWN"}
+            </span>
+          </div>
+          <div>
+            <span className="text-sm text-zinc-400">SOL: </span>
+            <span className="text-white font-medium">
+              ${(status?.solPrice ?? 0).toFixed(2)}
+            </span>
+            <span className={cn(
+              "ml-2 text-sm",
+              (status?.solChange24h ?? 0) >= 0 ? "text-green-400" : "text-red-400"
+            )}>
+              {(status?.solChange24h ?? 0) >= 0 ? "+" : ""}{(status?.solChange24h ?? 0).toFixed(2)}%
+            </span>
+          </div>
+          <div>
+            <span className="text-sm text-zinc-400">BTC 24h: </span>
+            <span className={cn(
+              "font-medium",
+              (status?.btcChange24h ?? 0) >= 0 ? "text-green-400" : "text-red-400"
+            )}>
+              {(status?.btcChange24h ?? 0) >= 0 ? "+" : ""}{(status?.btcChange24h ?? 0).toFixed(2)}%
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Open Positions */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+        <h2 className="text-lg font-semibold text-white mb-4">Open Positions</h2>
+        {positions.length === 0 ? (
+          <div className="text-zinc-500 text-center py-8">No open positions</div>
+        ) : (
+          <div className="space-y-3">
+            {positions.map((pos) => (
+              <div
+                key={pos.id}
+                className="flex items-center justify-between bg-zinc-800/50 rounded-lg p-4"
+              >
+                <div className="flex items-center gap-4">
+                  <div>
+                    <div className="font-medium text-white">{pos.tokenSymbol}</div>
+                    <div className="text-sm text-zinc-400">{pos.tokenName}</div>
+                  </div>
+                  <div className="text-sm text-zinc-400">
+                    Conv: {pos.convictionScore}
+                  </div>
+                </div>
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <div className={cn(
+                      "font-medium",
+                      pos.pnlPercent >= 0 ? "text-green-400" : "text-red-400"
+                    )}>
+                      {pos.pnlPercent >= 0 ? "+" : ""}{pos.pnlPercent.toFixed(2)}%
+                    </div>
+                    <div className={cn(
+                      "text-sm",
+                      pos.pnl >= 0 ? "text-green-400" : "text-red-400"
+                    )}>
+                      ${pos.pnl.toFixed(2)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleClosePosition(pos.id)}
+                    className="px-3 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded text-sm transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
-  );
+  )
 }

@@ -1,404 +1,471 @@
-'use client';
+"use client"
 
-import { useEffect, useState } from 'react';
-import { Settings, Save, RefreshCw, RotateCcw, AlertTriangle } from 'lucide-react';
-import { API_URL } from '@/lib/api';
+import { useEffect, useState, useCallback } from "react"
 
-interface BotSettings {
-  // Position Sizing
-  maxPositionSize: number;
-  minPositionSize: number;
-  maxOpenPositions: number;
-  maxTotalExposure: number;
-  maxSingleTradeRisk: number;
+interface Settings {
+  positionSizing: {
+    maxPositionSize: number
+    minPositionSize: number
+    maxOpenPositions: number
+    maxExposure: number
+    maxRiskPerTrade: number
+  }
+  entryRules: {
+    minConvictionScore: number
+    minSmartWalletCount: number
+    maxTokenAge: number
+    minLiquidity: number
+    dipDepthMin: number
+    dipDepthMax: number
+  }
+  exitRules: {
+    hardStopLoss: number
+    earlyDiscoveryStopLoss: number
+    timeBasedStopHours: number
+    trailingStopTier1: number
+    trailingStopTier2: number
+    trailingStopTier3: number
+  }
+  takeProfitLevels: {
+    tp30: number
+    tp60: number
+    tp100: number
+    tp200: number
+  }
+  dailyLimits: {
+    maxDailyLoss: number
+    maxDailyProfit: number
+    losingStreakPause: number
+    weeklyCircuitBreaker: number
+  }
+}
 
-  // Entry Rules
-  minConvictionScore: number;
-  minSmartWalletCount: number;
-  maxTokenAge: number;
-  minLiquidityDepth: number;
-  maxDipEntry: number;
-  minDipEntry: number;
-
-  // Exit Rules
-  defaultStopLoss: number;
-  earlyDiscoveryStopLoss: number;
-  trailingStopActivation: number;
-  trailingStopDistance: number;
-  timeBasedStopHours: number;
-
-  // Take Profit Levels
-  takeProfitLevel1: number;
-  takeProfitLevel1Percent: number;
-  takeProfitLevel2: number;
-  takeProfitLevel2Percent: number;
-  takeProfitLevel3: number;
-  takeProfitLevel3Percent: number;
-  moonbagPercent: number;
-
-  // Daily Limits
-  maxDailyLoss: number;
-  maxDailyProfit: number;
-  losingStreakPause: number;
-  weeklyCircuitBreaker: number;
-
-  // Execution
-  maxSlippageBuy: number;
-  maxSlippageSell: number;
-  maxSlippageEmergency: number;
-  maxRetries: number;
-  targetLatencyMs: number;
-
-  // Notifications
-  telegramEnabled: boolean;
-  telegramChatId: string;
-  discordEnabled: boolean;
-  discordWebhook: string;
-  emailEnabled: boolean;
-  emailAddress: string;
+const defaultSettings: Settings = {
+  positionSizing: {
+    maxPositionSize: 5,
+    minPositionSize: 1,
+    maxOpenPositions: 5,
+    maxExposure: 20,
+    maxRiskPerTrade: 1.5,
+  },
+  entryRules: {
+    minConvictionScore: 50,
+    minSmartWalletCount: 2,
+    maxTokenAge: 60,
+    minLiquidity: 30000,
+    dipDepthMin: 20,
+    dipDepthMax: 30,
+  },
+  exitRules: {
+    hardStopLoss: 25,
+    earlyDiscoveryStopLoss: 15,
+    timeBasedStopHours: 4,
+    trailingStopTier1: 15,
+    trailingStopTier2: 12,
+    trailingStopTier3: 10,
+  },
+  takeProfitLevels: {
+    tp30: 20,
+    tp60: 25,
+    tp100: 25,
+    tp200: 15,
+  },
+  dailyLimits: {
+    maxDailyLoss: 8,
+    maxDailyProfit: 15,
+    losingStreakPause: 5,
+    weeklyCircuitBreaker: 15,
+  },
 }
 
 export default function SettingsPage() {
-  const [settings, setSettings] = useState<BotSettings | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [hasChanges, setHasChanges] = useState(false);
+  const [settings, setSettings] = useState<Settings>(defaultSettings)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const fetchSettings = async () => {
+  const fetchSettings = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/settings`);
-      if (!response.ok) throw new Error('Failed to fetch');
-      const result = await response.json();
-      if (result.success) {
-        setSettings(result.data);
+      const res = await fetch("/api/settings")
+      const data = await res.json()
+      if (data.success && data.data) {
+        setSettings({ ...defaultSettings, ...data.data })
       }
-      setError(null);
     } catch (err) {
-      console.error('Error fetching settings:', err);
-      setError('Failed to fetch settings');
+      console.error("Failed to fetch settings:", err)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }, [])
 
   useEffect(() => {
-    fetchSettings();
-  }, []);
+    fetchSettings()
+  }, [fetchSettings])
 
-  const updateSetting = (key: keyof BotSettings, value: number | string | boolean) => {
-    if (!settings) return;
-    setSettings({ ...settings, [key]: value });
-    setHasChanges(true);
-    setSuccess(null);
-  };
-
-  const saveSettings = async () => {
-    if (!settings) return;
-
-    setSaving(true);
-    setError(null);
-    setSuccess(null);
-
+  const handleSave = async () => {
+    setSaving(true)
+    setSaved(false)
+    setError(null)
     try {
-      const response = await fetch(`${API_URL}/settings`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
-      });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
-      setSuccess('Settings saved successfully');
-      setHasChanges(false);
+      })
+      const data = await res.json()
+      if (data.success) {
+        setSaved(true)
+        setTimeout(() => setSaved(false), 3000)
+      } else {
+        setError(data.error || "Failed to save settings")
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to save settings';
-      setError(message);
+      setError("Failed to save settings")
     } finally {
-      setSaving(false);
+      setSaving(false)
     }
-  };
+  }
 
-  const resetToDefaults = async () => {
-    if (!confirm('Are you sure you want to reset all settings to defaults? This cannot be undone.')) return;
-
-    setSaving(true);
+  const handleReset = async () => {
+    if (!confirm("Reset all settings to defaults?")) return
     try {
-      const response = await fetch(`${API_URL}/settings/reset`, {
-        method: 'POST',
-      });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
-      await fetchSettings();
-      setSuccess('Settings reset to defaults');
-      setHasChanges(false);
+      const res = await fetch("/api/settings/reset", {
+        method: "POST",
+      })
+      const data = await res.json()
+      if (data.success) {
+        await fetchSettings()
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to reset settings';
-      setError(message);
-    } finally {
-      setSaving(false);
+      setError("Failed to reset settings")
     }
-  };
+  }
+
+  const updateSetting = (category: keyof Settings, key: string, value: number) => {
+    setSettings((prev) => ({
+      ...prev,
+      [category]: {
+        ...prev[category],
+        [key]: value,
+      },
+    }))
+  }
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-16 w-16 animate-spin rounded-full border-b-2 border-white"></div>
-          <p className="text-zinc-400">Loading settings...</p>
-        </div>
+      <div className="flex items-center justify-center h-[60vh]">
+        <div className="text-zinc-400">Loading...</div>
       </div>
-    );
+    )
   }
 
-  if (!settings) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-white">
-        <p className="text-zinc-400">Failed to load settings</p>
-      </div>
-    );
-  }
-
-  const NumberInput = ({ label, value, onChange, min, max, step = 1, suffix = '' }: {
-    label: string; value: number; onChange: (v: number) => void;
-    min?: number; max?: number; step?: number; suffix?: string;
+  const SettingInput = ({
+    label,
+    value,
+    onChange,
+    suffix = "",
+    min = 0,
+    max = 100,
+    step = 1,
+  }: {
+    label: string
+    value: number
+    onChange: (v: number) => void
+    suffix?: string
+    min?: number
+    max?: number
+    step?: number
   }) => (
-    <div>
-      <label className="block text-sm text-zinc-400 mb-1">{label}</label>
+    <div className="flex items-center justify-between py-2">
+      <label className="text-sm text-zinc-300">{label}</label>
       <div className="flex items-center gap-2">
         <input
           type="number"
           value={value}
-          onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+          onChange={(e) => onChange(Number(e.target.value))}
           min={min}
           max={max}
           step={step}
-          className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-zinc-600"
+          className="w-24 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-white text-right text-sm focus:outline-none focus:border-zinc-600"
         />
-        {suffix && <span className="text-zinc-500">{suffix}</span>}
+        {suffix && <span className="text-sm text-zinc-500 w-8">{suffix}</span>}
       </div>
     </div>
-  );
-
-  const ToggleInput = ({ label, description, value, onChange }: {
-    label: string; description: string; value: boolean; onChange: (v: boolean) => void;
-  }) => (
-    <div className="flex items-center justify-between p-4 rounded-lg bg-zinc-800/50">
-      <div>
-        <p className="text-zinc-300">{label}</p>
-        <p className="text-xs text-zinc-500">{description}</p>
-      </div>
-      <button
-        onClick={() => onChange(!value)}
-        className={`relative w-14 h-7 rounded-full transition-colors ${
-          value ? 'bg-green-600' : 'bg-zinc-700'
-        }`}
-      >
-        <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-transform ${
-          value ? 'left-8' : 'left-1'
-        }`} />
-      </button>
-    </div>
-  );
+  )
 
   return (
-    <div className="min-h-screen bg-gray-950 p-6 text-white">
-      <div className="mx-auto max-w-4xl">
-        {/* Header */}
-        <header className="mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-white flex items-center gap-3">
-                <Settings className="h-8 w-8 text-zinc-400" />
-                Settings
-              </h1>
-              <p className="text-zinc-500 mt-1">Configure bot parameters and preferences</p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={resetToDefaults}
-                disabled={saving}
-                className="flex items-center gap-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 px-4 py-2 transition-colors"
-              >
-                <RotateCcw className="h-4 w-4" />
-                Reset
-              </button>
-              <button
-                onClick={saveSettings}
-                disabled={saving || !hasChanges}
-                className="flex items-center gap-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:bg-green-800 disabled:opacity-50 px-4 py-2 transition-colors"
-              >
-                {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                Save Changes
-              </button>
-            </div>
-          </div>
-        </header>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">Settings</h1>
+        <div className="flex gap-2">
+          <button
+            onClick={handleReset}
+            className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-medium transition-colors"
+          >
+            Reset to Defaults
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+          >
+            {saving ? "Saving..." : saved ? "Saved!" : "Save Changes"}
+          </button>
+        </div>
+      </div>
 
-        {error && (
-          <div className="mb-6 rounded-lg bg-red-500/10 border border-red-500/20 p-4">
-            <p className="text-red-400">{error}</p>
-          </div>
-        )}
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 text-red-400">
+          {error}
+          <button onClick={() => setError(null)} className="ml-4 text-sm underline">
+            Dismiss
+          </button>
+        </div>
+      )}
 
-        {success && (
-          <div className="mb-6 rounded-lg bg-green-500/10 border border-green-500/20 p-4">
-            <p className="text-green-400">{success}</p>
-          </div>
-        )}
-
-        {hasChanges && (
-          <div className="mb-6 rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-4 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-yellow-400" />
-            <p className="text-yellow-400">You have unsaved changes</p>
-          </div>
-        )}
-
+      <div className="grid md:grid-cols-2 gap-6">
         {/* Position Sizing */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Position Sizing</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <NumberInput label="Max Position Size" value={settings.maxPositionSize} onChange={(v) => updateSetting('maxPositionSize', v)} min={1} max={10} step={0.5} suffix="%" />
-            <NumberInput label="Min Position Size" value={settings.minPositionSize} onChange={(v) => updateSetting('minPositionSize', v)} min={0.5} max={5} step={0.5} suffix="%" />
-            <NumberInput label="Max Open Positions" value={settings.maxOpenPositions} onChange={(v) => updateSetting('maxOpenPositions', v)} min={1} max={10} />
-            <NumberInput label="Max Total Exposure" value={settings.maxTotalExposure} onChange={(v) => updateSetting('maxTotalExposure', v)} min={5} max={50} suffix="%" />
-            <NumberInput label="Max Single Trade Risk" value={settings.maxSingleTradeRisk} onChange={(v) => updateSetting('maxSingleTradeRisk', v)} min={0.5} max={5} step={0.5} suffix="%" />
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <h2 className="text-lg font-medium text-white mb-4">Position Sizing</h2>
+          <div className="space-y-1">
+            <SettingInput
+              label="Max Position Size"
+              value={settings.positionSizing.maxPositionSize}
+              onChange={(v) => updateSetting("positionSizing", "maxPositionSize", v)}
+              suffix="%"
+              max={10}
+            />
+            <SettingInput
+              label="Min Position Size"
+              value={settings.positionSizing.minPositionSize}
+              onChange={(v) => updateSetting("positionSizing", "minPositionSize", v)}
+              suffix="%"
+              max={5}
+            />
+            <SettingInput
+              label="Max Open Positions"
+              value={settings.positionSizing.maxOpenPositions}
+              onChange={(v) => updateSetting("positionSizing", "maxOpenPositions", v)}
+              max={10}
+            />
+            <SettingInput
+              label="Max Exposure"
+              value={settings.positionSizing.maxExposure}
+              onChange={(v) => updateSetting("positionSizing", "maxExposure", v)}
+              suffix="%"
+              max={50}
+            />
+            <SettingInput
+              label="Max Risk Per Trade"
+              value={settings.positionSizing.maxRiskPerTrade}
+              onChange={(v) => updateSetting("positionSizing", "maxRiskPerTrade", v)}
+              suffix="%"
+              step={0.5}
+              max={5}
+            />
           </div>
-        </section>
+        </div>
 
         {/* Entry Rules */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Entry Rules</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <NumberInput label="Min Conviction Score" value={settings.minConvictionScore} onChange={(v) => updateSetting('minConvictionScore', v)} min={50} max={100} />
-            <NumberInput label="Min Smart Wallet Count" value={settings.minSmartWalletCount} onChange={(v) => updateSetting('minSmartWalletCount', v)} min={1} max={5} />
-            <NumberInput label="Max Token Age" value={settings.maxTokenAge} onChange={(v) => updateSetting('maxTokenAge', v)} min={1} max={24} suffix="hours" />
-            <NumberInput label="Min Liquidity Depth" value={settings.minLiquidityDepth} onChange={(v) => updateSetting('minLiquidityDepth', v)} min={10000} max={200000} step={5000} suffix="$" />
-            <NumberInput label="Min Dip Entry" value={settings.minDipEntry} onChange={(v) => updateSetting('minDipEntry', v)} min={5} max={40} suffix="%" />
-            <NumberInput label="Max Dip Entry" value={settings.maxDipEntry} onChange={(v) => updateSetting('maxDipEntry', v)} min={10} max={50} suffix="%" />
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <h2 className="text-lg font-medium text-white mb-4">Entry Rules</h2>
+          <div className="space-y-1">
+            <SettingInput
+              label="Min Conviction Score"
+              value={settings.entryRules.minConvictionScore}
+              onChange={(v) => updateSetting("entryRules", "minConvictionScore", v)}
+              min={0}
+              max={100}
+            />
+            <SettingInput
+              label="Min Smart Wallet Count"
+              value={settings.entryRules.minSmartWalletCount}
+              onChange={(v) => updateSetting("entryRules", "minSmartWalletCount", v)}
+              min={1}
+              max={10}
+            />
+            <SettingInput
+              label="Max Token Age"
+              value={settings.entryRules.maxTokenAge}
+              onChange={(v) => updateSetting("entryRules", "maxTokenAge", v)}
+              suffix="min"
+              max={1440}
+            />
+            <SettingInput
+              label="Min Liquidity"
+              value={settings.entryRules.minLiquidity}
+              onChange={(v) => updateSetting("entryRules", "minLiquidity", v)}
+              suffix="$"
+              max={500000}
+              step={1000}
+            />
+            <SettingInput
+              label="Dip Depth Min"
+              value={settings.entryRules.dipDepthMin}
+              onChange={(v) => updateSetting("entryRules", "dipDepthMin", v)}
+              suffix="%"
+              max={50}
+            />
+            <SettingInput
+              label="Dip Depth Max"
+              value={settings.entryRules.dipDepthMax}
+              onChange={(v) => updateSetting("entryRules", "dipDepthMax", v)}
+              suffix="%"
+              max={50}
+            />
           </div>
-        </section>
+        </div>
 
         {/* Exit Rules */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Exit Rules</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <NumberInput label="Default Stop Loss" value={settings.defaultStopLoss} onChange={(v) => updateSetting('defaultStopLoss', v)} min={10} max={40} suffix="%" />
-            <NumberInput label="Early Discovery Stop Loss" value={settings.earlyDiscoveryStopLoss} onChange={(v) => updateSetting('earlyDiscoveryStopLoss', v)} min={5} max={25} suffix="%" />
-            <NumberInput label="Trailing Stop Activation" value={settings.trailingStopActivation} onChange={(v) => updateSetting('trailingStopActivation', v)} min={10} max={50} suffix="% gain" />
-            <NumberInput label="Trailing Stop Distance" value={settings.trailingStopDistance} onChange={(v) => updateSetting('trailingStopDistance', v)} min={5} max={25} suffix="%" />
-            <NumberInput label="Time-Based Stop" value={settings.timeBasedStopHours} onChange={(v) => updateSetting('timeBasedStopHours', v)} min={1} max={12} suffix="hours" />
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <h2 className="text-lg font-medium text-white mb-4">Exit Rules</h2>
+          <div className="space-y-1">
+            <SettingInput
+              label="Hard Stop Loss"
+              value={settings.exitRules.hardStopLoss}
+              onChange={(v) => updateSetting("exitRules", "hardStopLoss", v)}
+              suffix="%"
+              min={10}
+              max={40}
+            />
+            <SettingInput
+              label="Early Discovery Stop Loss"
+              value={settings.exitRules.earlyDiscoveryStopLoss}
+              onChange={(v) => updateSetting("exitRules", "earlyDiscoveryStopLoss", v)}
+              suffix="%"
+              min={5}
+              max={30}
+            />
+            <SettingInput
+              label="Time-Based Stop"
+              value={settings.exitRules.timeBasedStopHours}
+              onChange={(v) => updateSetting("exitRules", "timeBasedStopHours", v)}
+              suffix="hrs"
+              min={1}
+              max={24}
+            />
+            <SettingInput
+              label="Trailing Stop (20-50%)"
+              value={settings.exitRules.trailingStopTier1}
+              onChange={(v) => updateSetting("exitRules", "trailingStopTier1", v)}
+              suffix="%"
+              min={5}
+              max={25}
+            />
+            <SettingInput
+              label="Trailing Stop (50-100%)"
+              value={settings.exitRules.trailingStopTier2}
+              onChange={(v) => updateSetting("exitRules", "trailingStopTier2", v)}
+              suffix="%"
+              min={5}
+              max={20}
+            />
+            <SettingInput
+              label="Trailing Stop (100%+)"
+              value={settings.exitRules.trailingStopTier3}
+              onChange={(v) => updateSetting("exitRules", "trailingStopTier3", v)}
+              suffix="%"
+              min={5}
+              max={15}
+            />
           </div>
-        </section>
-
-        {/* Take Profit */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Take Profit Levels</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <NumberInput label="Level 1 Target" value={settings.takeProfitLevel1} onChange={(v) => updateSetting('takeProfitLevel1', v)} min={10} max={100} suffix="%" />
-              <NumberInput label="Level 1 Sell %" value={settings.takeProfitLevel1Percent} onChange={(v) => updateSetting('takeProfitLevel1Percent', v)} min={10} max={50} suffix="%" />
-            </div>
-            <div className="space-y-2">
-              <NumberInput label="Level 2 Target" value={settings.takeProfitLevel2} onChange={(v) => updateSetting('takeProfitLevel2', v)} min={30} max={150} suffix="%" />
-              <NumberInput label="Level 2 Sell %" value={settings.takeProfitLevel2Percent} onChange={(v) => updateSetting('takeProfitLevel2Percent', v)} min={10} max={50} suffix="%" />
-            </div>
-            <div className="space-y-2">
-              <NumberInput label="Level 3 Target" value={settings.takeProfitLevel3} onChange={(v) => updateSetting('takeProfitLevel3', v)} min={50} max={300} suffix="%" />
-              <NumberInput label="Level 3 Sell %" value={settings.takeProfitLevel3Percent} onChange={(v) => updateSetting('takeProfitLevel3Percent', v)} min={10} max={50} suffix="%" />
-            </div>
-          </div>
-          <div className="mt-4">
-            <NumberInput label="Moonbag Percentage" value={settings.moonbagPercent} onChange={(v) => updateSetting('moonbagPercent', v)} min={5} max={30} suffix="%" />
-          </div>
-        </section>
+        </div>
 
         {/* Daily Limits */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Daily Limits</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <NumberInput label="Max Daily Loss" value={settings.maxDailyLoss} onChange={(v) => updateSetting('maxDailyLoss', v)} min={3} max={20} suffix="%" />
-            <NumberInput label="Max Daily Profit" value={settings.maxDailyProfit} onChange={(v) => updateSetting('maxDailyProfit', v)} min={5} max={50} suffix="%" />
-            <NumberInput label="Losing Streak Pause" value={settings.losingStreakPause} onChange={(v) => updateSetting('losingStreakPause', v)} min={3} max={10} suffix="trades" />
-            <NumberInput label="Weekly Circuit Breaker" value={settings.weeklyCircuitBreaker} onChange={(v) => updateSetting('weeklyCircuitBreaker', v)} min={5} max={30} suffix="%" />
-          </div>
-        </section>
-
-        {/* Execution */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Execution</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <NumberInput label="Max Slippage (Buy)" value={settings.maxSlippageBuy} onChange={(v) => updateSetting('maxSlippageBuy', v)} min={1} max={10} step={0.5} suffix="%" />
-            <NumberInput label="Max Slippage (Sell)" value={settings.maxSlippageSell} onChange={(v) => updateSetting('maxSlippageSell', v)} min={1} max={15} step={0.5} suffix="%" />
-            <NumberInput label="Max Slippage (Emergency)" value={settings.maxSlippageEmergency} onChange={(v) => updateSetting('maxSlippageEmergency', v)} min={5} max={25} suffix="%" />
-            <NumberInput label="Max Retries" value={settings.maxRetries} onChange={(v) => updateSetting('maxRetries', v)} min={1} max={5} />
-            <NumberInput label="Target Latency" value={settings.targetLatencyMs} onChange={(v) => updateSetting('targetLatencyMs', v)} min={100} max={2000} step={100} suffix="ms" />
-          </div>
-        </section>
-
-        {/* Notifications */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Notifications</h2>
-          <div className="space-y-4">
-            <ToggleInput
-              label="Telegram Notifications"
-              description="Receive alerts via Telegram"
-              value={settings.telegramEnabled}
-              onChange={(v) => updateSetting('telegramEnabled', v)}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <h2 className="text-lg font-medium text-white mb-4">Daily Limits</h2>
+          <div className="space-y-1">
+            <SettingInput
+              label="Max Daily Loss"
+              value={settings.dailyLimits.maxDailyLoss}
+              onChange={(v) => updateSetting("dailyLimits", "maxDailyLoss", v)}
+              suffix="%"
+              min={1}
+              max={20}
             />
-            {settings.telegramEnabled && (
-              <div>
-                <label className="block text-sm text-zinc-400 mb-1">Telegram Chat ID</label>
-                <input
-                  type="text"
-                  value={settings.telegramChatId}
-                  onChange={(e) => updateSetting('telegramChatId', e.target.value)}
-                  placeholder="Enter your Telegram chat ID"
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-zinc-600"
-                />
-              </div>
-            )}
-
-            <ToggleInput
-              label="Discord Notifications"
-              description="Receive alerts via Discord webhook"
-              value={settings.discordEnabled}
-              onChange={(v) => updateSetting('discordEnabled', v)}
+            <SettingInput
+              label="Max Daily Profit"
+              value={settings.dailyLimits.maxDailyProfit}
+              onChange={(v) => updateSetting("dailyLimits", "maxDailyProfit", v)}
+              suffix="%"
+              min={5}
+              max={50}
             />
-            {settings.discordEnabled && (
-              <div>
-                <label className="block text-sm text-zinc-400 mb-1">Discord Webhook URL</label>
-                <input
-                  type="text"
-                  value={settings.discordWebhook}
-                  onChange={(e) => updateSetting('discordWebhook', e.target.value)}
-                  placeholder="Enter your Discord webhook URL"
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-zinc-600"
-                />
-              </div>
-            )}
-
-            <ToggleInput
-              label="Email Notifications"
-              description="Receive alerts via email"
-              value={settings.emailEnabled}
-              onChange={(v) => updateSetting('emailEnabled', v)}
+            <SettingInput
+              label="Losing Streak Pause"
+              value={settings.dailyLimits.losingStreakPause}
+              onChange={(v) => updateSetting("dailyLimits", "losingStreakPause", v)}
+              suffix="trades"
+              min={3}
+              max={10}
             />
-            {settings.emailEnabled && (
-              <div>
-                <label className="block text-sm text-zinc-400 mb-1">Email Address</label>
-                <input
-                  type="email"
-                  value={settings.emailAddress}
-                  onChange={(e) => updateSetting('emailAddress', e.target.value)}
-                  placeholder="Enter your email address"
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-zinc-600"
-                />
-              </div>
-            )}
+            <SettingInput
+              label="Weekly Circuit Breaker"
+              value={settings.dailyLimits.weeklyCircuitBreaker}
+              onChange={(v) => updateSetting("dailyLimits", "weeklyCircuitBreaker", v)}
+              suffix="%"
+              min={5}
+              max={30}
+            />
           </div>
-        </section>
+        </div>
+
+        {/* Take Profit Levels */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 md:col-span-2">
+          <h2 className="text-lg font-medium text-white mb-4">Take Profit Levels (% to sell at each level)</h2>
+          <div className="grid grid-cols-4 gap-4">
+            <div>
+              <label className="block text-sm text-zinc-400 mb-2">At +30%</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={settings.takeProfitLevels.tp30}
+                  onChange={(e) => updateSetting("takeProfitLevels", "tp30", Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-white text-sm focus:outline-none focus:border-zinc-600"
+                />
+                <span className="text-zinc-500">%</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-2">At +60%</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={settings.takeProfitLevels.tp60}
+                  onChange={(e) => updateSetting("takeProfitLevels", "tp60", Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-white text-sm focus:outline-none focus:border-zinc-600"
+                />
+                <span className="text-zinc-500">%</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-2">At +100%</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={settings.takeProfitLevels.tp100}
+                  onChange={(e) => updateSetting("takeProfitLevels", "tp100", Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-white text-sm focus:outline-none focus:border-zinc-600"
+                />
+                <span className="text-zinc-500">%</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-2">At +200%</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={settings.takeProfitLevels.tp200}
+                  onChange={(e) => updateSetting("takeProfitLevels", "tp200", Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-white text-sm focus:outline-none focus:border-zinc-600"
+                />
+                <span className="text-zinc-500">%</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
-  );
+  )
 }
