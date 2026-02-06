@@ -30,9 +30,9 @@ export class HypeDetector {
   // Cache for holder counts (to calculate growth rate)
   private holderCountCache: Map<string, { count: number; timestamp: number }[]> = new Map();
 
-  // Memory management limits
-  private readonly MAX_CACHED_TOKENS = 50;
-  private readonly MAX_HISTORY_PER_TOKEN = 10;
+  // Memory management limits - reduced for 512MB instances
+  private readonly MAX_CACHED_TOKENS = 20;
+  private readonly MAX_HISTORY_PER_TOKEN = 5;
 
   constructor(connection: Connection) {
     this.connection = connection;

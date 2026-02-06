@@ -719,8 +719,8 @@ export class WeightOptimizer {
       );
       cycleId = cycleResult.rows[0].id;
 
-      // Get recent trades
-      const recentTrades = await this.getRecentTrades(100);
+      // Get recent trades - reduced for memory
+      const recentTrades = await this.getRecentTrades(30);
 
       if (recentTrades.length < this.MIN_TRADES_FOR_ADJUSTMENT) {
         logger.warn('Skipping optimization - insufficient data', {

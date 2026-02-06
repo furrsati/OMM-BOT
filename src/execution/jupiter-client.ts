@@ -64,7 +64,7 @@ export class JupiterClient {
   private baseUrl: string;
   private quoteCache: Map<string, { quote: SwapQuote; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 5000; // 5 seconds
-  private readonly MAX_CACHE_SIZE = 50; // Limit cache size to prevent memory bloat
+  private readonly MAX_CACHE_SIZE = 20; // Reduced for 512MB instances
 
   constructor() {
     this.baseUrl = process.env.JUPITER_API_URL || 'https://quote-api.jup.ag/v6';

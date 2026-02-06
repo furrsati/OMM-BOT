@@ -103,7 +103,7 @@ export class PatternMatcher {
     try {
       logger.debug('🔍 Finding similar trades', { limit });
 
-      // Query all completed trades with fingerprints
+      // Query recent completed trades with fingerprints - REDUCED for memory
       const result = await db.query<any>(`
         SELECT
           id,
@@ -125,7 +125,7 @@ export class PatternMatcher {
         WHERE outcome IS NOT NULL
           AND fingerprint IS NOT NULL
         ORDER BY entry_time DESC
-        LIMIT 500
+        LIMIT 30
       `);
 
       if (!result.rows || result.rows.length === 0) {

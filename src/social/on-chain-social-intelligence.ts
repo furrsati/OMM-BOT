@@ -67,9 +67,9 @@ export class OnChainSocialIntelligence {
   // Known bad wallets (rugs, scammers)
   private knownBadWallets: Set<string> = new Set();
 
-  // Memory management limits
-  private readonly MAX_WALLET_RELATIONSHIPS = 200;
-  private readonly MAX_KNOWN_WALLETS = 500;
+  // Memory management limits - reduced for 512MB instances
+  private readonly MAX_WALLET_RELATIONSHIPS = 50;
+  private readonly MAX_KNOWN_WALLETS = 100;
 
   constructor(connection: Connection) {
     this.connection = connection;
