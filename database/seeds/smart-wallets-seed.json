@@ -1,0 +1,82 @@
+{
+  "_warning": "PUBLIC WALLETS - These addresses are from public sources and may already be crowded. Use as a starting point only. The bot's wallet scanner will discover new, private alpha wallets over time.",
+  "_sources": [
+    "https://dune.com/pixelz/solana-alpha-wallet-signals",
+    "https://dune.com/dev2020/solana-alphas",
+    "https://solscan.io"
+  ],
+  "_lastUpdated": "2026-02-06",
+
+  "wallets": [
+    {
+      "address": "4Be9CvxqHW6BYiRAxW9Q3xu1ycTMWaL5z8NX4HR3ha7t",
+      "tier": 2,
+      "notes": "Known for 50x-100x flips on Pump.fun/Raydium launches. PUBLIC - may be crowded.",
+      "score": 65,
+      "winRate": 0.45
+    },
+    {
+      "address": "AVAZvHLR2PcWpDf8BXY4rVxNHYRBytycHkcB5z5QNXYm",
+      "tier": 2,
+      "notes": "High win rate on early Pump.fun launches. PUBLIC - may be crowded.",
+      "score": 60,
+      "winRate": 0.42
+    },
+    {
+      "address": "8zFZHuSRuDpuAR7J6FzwyF3vKNx4CVW3DFHJerQhc7Zd",
+      "tier": 2,
+      "notes": "Smart money focus on insider signals. PUBLIC - may be crowded.",
+      "score": 55,
+      "winRate": 0.40
+    },
+    {
+      "address": "H72yLkhTnoBfhBTXXaj1RBXuirm8s8G5fcVh2XpQLggM",
+      "tier": 2,
+      "notes": "Whale-level volumes with low rug rate. PUBLIC - may be crowded.",
+      "score": 60,
+      "winRate": 0.38
+    },
+    {
+      "address": "DXX3AEHgJj5fhyJJX1VTJ5HXkAqXYdfXCFT1xU3Uw8F1",
+      "tier": 3,
+      "notes": "Labeled alpha-wallets.solana on Solscan. Unverified performance.",
+      "score": 40,
+      "winRate": 0.30
+    },
+    {
+      "address": "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9",
+      "tier": 2,
+      "notes": "Active Jupiter/Raydium trader. Found via Dune top traders dashboard.",
+      "score": 55,
+      "winRate": 0.35
+    },
+    {
+      "address": "Bf1GNJ6yi2RVVp1yLT2g8WKxdMCCjBCFGJwzMByBBq4z",
+      "tier": 2,
+      "notes": "Consistent early entries on trending meme coins. Found via GMGN Monitor.",
+      "score": 58,
+      "winRate": 0.40
+    },
+    {
+      "address": "7Vbmv1jt4vyuqBZcpYPpnVhrqVe5e6ZPb6JxDcffRHUM",
+      "tier": 2,
+      "notes": "Known for quick flip strategy with tight stop losses.",
+      "score": 52,
+      "winRate": 0.48
+    },
+    {
+      "address": "FmH3GCFP9wvh4e9vpPW2cGDK6MK8CQNrPJZt2yzxSPs3",
+      "tier": 3,
+      "notes": "New wallet showing promising early entry patterns. Needs verification.",
+      "score": 45,
+      "winRate": 0.35
+    },
+    {
+      "address": "3JNrhBd8HVkHU7bMDdVrJ71pWFzZpJxvG3Rsvc4oNfAr",
+      "tier": 2,
+      "notes": "Active on Pump.fun launches. Medium conviction due to public exposure.",
+      "score": 55,
+      "winRate": 0.42
+    }
+  ]
+}

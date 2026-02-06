@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import {
   asyncHandler,
   requireAuth,
@@ -134,11 +135,15 @@ router.post(
       });
     }
 
+    const walletId = randomUUID();
     const result = await getPool().query(
-      `INSERT INTO smart_wallets (address, tier, notes)
-       VALUES ($1, $2, $3)
+      `INSERT INTO smart_wallets
+       (id, address, tier, notes, score, win_rate, average_return, tokens_entered,
+        total_trades, successful_trades, average_hold_time, is_active, is_crowded,
+        last_active, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 50, 0, 0, 0, 0, 0, 0, true, false, NOW(), NOW(), NOW())
        RETURNING id, address, tier, score, created_at`,
-      [address, tier, notes || null]
+      [walletId, address, tier, notes || null]
     );
 
     const row = result.rows[0];
@@ -254,6 +259,78 @@ router.delete(
     res.json({
       success: true,
       message: 'Wallet removed from tracking',
+    });
+  })
+);
+
+/**
+ * POST /api/smart-wallets/import
+ * Bulk import smart wallets
+ */
+router.post(
+  '/import',
+  requireAuth,
+  validateBody(schemas.smartWalletImport),
+  auditLog('SMART_WALLET_BULK_IMPORT'),
+  asyncHandler(async (req: any, res: any) => {
+    const { wallets } = req.body;
+
+    const results = {
+      imported: 0,
+      skipped: 0,
+      errors: [] as string[],
+    };
+
+    for (const wallet of wallets) {
+      try {
+        // Check if wallet already exists
+        const existing = await getPool().query(
+          `SELECT id, is_active FROM smart_wallets WHERE address = $1`,
+          [wallet.address]
+        );
+
+        if (existing.rows.length > 0) {
+          // Reactivate if inactive, otherwise skip
+          if (!existing.rows[0].is_active) {
+            await getPool().query(
+              `UPDATE smart_wallets
+               SET is_active = true, tier = $2, notes = $3, updated_at = NOW()
+               WHERE address = $1`,
+              [wallet.address, wallet.tier || 2, wallet.notes || null]
+            );
+            results.imported++;
+          } else {
+            results.skipped++;
+          }
+          continue;
+        }
+
+        // Insert new wallet with explicit UUID and all required columns
+        await getPool().query(
+          `INSERT INTO smart_wallets
+           (id, address, tier, notes, score, win_rate, average_return, is_active, last_active,
+            tokens_entered, total_trades, successful_trades, average_hold_time, is_crowded,
+            created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 0, true, NOW(), 0, 0, 0, 0, false, NOW(), NOW())`,
+          [
+            randomUUID(),
+            wallet.address,
+            wallet.tier || 2,
+            wallet.notes || null,
+            wallet.score || 50,
+            wallet.winRate || 0,
+          ]
+        );
+        results.imported++;
+      } catch (error: any) {
+        results.errors.push(`${wallet.address.slice(0, 8)}...: ${error.message}`);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      data: results,
+      message: `Imported ${results.imported} wallets, skipped ${results.skipped} existing`,
     });
   })
 );

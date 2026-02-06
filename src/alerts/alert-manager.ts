@@ -63,6 +63,13 @@ export class AlertManager {
   }
 
   /**
+   * Check if any alert channel is configured
+   */
+  hasEnabledChannels(): boolean {
+    return this.telegramClient.isEnabled() || this.discordClient.isEnabled();
+  }
+
+  /**
    * Initialize the alert manager
    */
   async initialize(): Promise<void> {
@@ -74,9 +81,16 @@ export class AlertManager {
     // Clean up old deduplication entries periodically
     setInterval(() => this.cleanupDeduplication(), 60000); // Every minute
 
+    const telegramEnabled = this.telegramClient.isEnabled();
+    const discordEnabled = this.discordClient.isEnabled();
+
+    if (!telegramEnabled && !discordEnabled) {
+      logger.warn('⚠️ No alert channels configured. Set TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID or DISCORD_WEBHOOK_URL to enable alerts.');
+    }
+
     logger.info('Alert Manager initialized', {
-      telegram: this.telegramClient.isEnabled(),
-      discord: this.discordClient.isEnabled(),
+      telegram: telegramEnabled,
+      discord: discordEnabled,
     });
   }
 
@@ -300,17 +314,33 @@ export class AlertManager {
    * Dispatch alert to all channels
    */
   private async dispatchAlert(alert: Alert): Promise<void> {
+    // Skip if no channels configured
+    if (!this.hasEnabledChannels()) {
+      return;
+    }
+
     const results = await Promise.allSettled([
       this.sendToTelegram(alert),
       this.sendToDiscord(alert),
     ]);
 
-    // Count successes and failures
+    // Count successes and failures (only count channels that are enabled)
     let sent = 0;
     let failed = 0;
+    let enabledCount = 0;
 
-    for (const result of results) {
-      if (result.status === 'fulfilled' && result.value) {
+    if (this.telegramClient.isEnabled()) {
+      enabledCount++;
+      if (results[0].status === 'fulfilled' && results[0].value) {
+        sent++;
+      } else {
+        failed++;
+      }
+    }
+
+    if (this.discordClient.isEnabled()) {
+      enabledCount++;
+      if (results[1].status === 'fulfilled' && results[1].value) {
         sent++;
       } else {
         failed++;
@@ -324,8 +354,8 @@ export class AlertManager {
       this.stats.lastAlert = new Date();
     }
 
-    // Log if all channels failed
-    if (sent === 0) {
+    // Log if all ENABLED channels failed (not just if all channels failed)
+    if (sent === 0 && enabledCount > 0) {
       logger.error('Alert failed to send on all channels', {
         type: alert.type,
         level: alert.level,

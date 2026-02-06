@@ -59,6 +59,19 @@ export const schemas = {
     isActive: z.boolean().optional(),
   }),
 
+  // Smart wallet bulk import
+  smartWalletImport: z.object({
+    wallets: z.array(
+      z.object({
+        address: z.string().regex(SOLANA_ADDRESS_REGEX, 'Invalid wallet address'),
+        tier: z.number().int().min(1).max(3).default(2),
+        notes: z.string().max(500).optional().nullable(),
+        score: z.number().min(0).max(100).optional(),
+        winRate: z.number().min(0).max(1).optional(),
+      })
+    ).min(1, 'At least one wallet required').max(100, 'Maximum 100 wallets per import'),
+  }),
+
   // Blacklist entry creation
   blacklistCreate: z.object({
     address: z.string().regex(SOLANA_ADDRESS_REGEX, 'Invalid address'),

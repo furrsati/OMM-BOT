@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { createHash } from 'crypto';
 import {
   asyncHandler,
   requireAuth,
@@ -11,6 +12,12 @@ import {
 import { botContextManager } from '../services/bot-context';
 import { getPool } from '../../db/postgres';
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
+
+// Helper function to generate audit log checksum
+function generateAuditChecksum(action: string, details: object): string {
+  const data = JSON.stringify({ action, details, timestamp: new Date().toISOString() });
+  return createHash('sha256').update(data).digest('hex');
+}
 
 const router = Router();
 
@@ -241,19 +248,21 @@ router.post(
       );
 
       // Log the sweep in audit table
+      const successDetails = {
+        actor: 'system',
+        amount,
+        destination: destinationAddress,
+        signature,
+        fromBalance: currentBalance,
+        ipAddress: req.ip || 'unknown',
+      };
       await getPool().query(
-        `INSERT INTO audit_log (action, actor, details, ip_address)
-         VALUES ($1, $2, $3, $4)`,
+        `INSERT INTO audit_log (action, details, checksum, created_at)
+         VALUES ($1, $2, $3, NOW())`,
         [
           'WALLET_SWEEP_SUCCESS',
-          'system',
-          JSON.stringify({
-            amount,
-            destination: destinationAddress,
-            signature,
-            fromBalance: currentBalance,
-          }),
-          req.ip || 'unknown',
+          JSON.stringify(successDetails),
+          generateAuditChecksum('WALLET_SWEEP_SUCCESS', successDetails),
         ]
       );
 
@@ -271,18 +280,20 @@ router.post(
 
     } catch (txError: any) {
       // Log failed sweep attempt
+      const failDetails = {
+        actor: 'system',
+        amount,
+        destination: destinationAddress,
+        error: txError.message,
+        ipAddress: req.ip || 'unknown',
+      };
       await getPool().query(
-        `INSERT INTO audit_log (action, actor, details, ip_address)
-         VALUES ($1, $2, $3, $4)`,
+        `INSERT INTO audit_log (action, details, checksum, created_at)
+         VALUES ($1, $2, $3, NOW())`,
         [
           'WALLET_SWEEP_FAILED',
-          'system',
-          JSON.stringify({
-            amount,
-            destination: destinationAddress,
-            error: txError.message,
-          }),
-          req.ip || 'unknown',
+          JSON.stringify(failDetails),
+          generateAuditChecksum('WALLET_SWEEP_FAILED', failDetails),
         ]
       );
 

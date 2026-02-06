@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { createHash } from 'crypto';
 import { getPool } from '../../db/postgres';
 import { logger } from '../../utils/logger';
 import { AuthenticatedRequest } from './auth';
@@ -80,27 +81,43 @@ function redactSensitiveFields(body: Record<string, any>): Record<string, any> {
 }
 
 /**
+ * Generate checksum for tamper-proof audit log
+ */
+function generateChecksum(action: string, details: object, timestamp: Date): string {
+  const data = JSON.stringify({ action, details, timestamp: timestamp.toISOString() });
+  return createHash('sha256').update(data).digest('hex');
+}
+
+/**
  * Write audit log entry to database
+ * Consolidates all entry fields into the 'details' JSONB column to match schema
  */
 export async function writeAuditLog(entry: AuditLogEntry): Promise<void> {
   try {
     const pool = getPool();
+
+    // Consolidate all entry data into the details JSONB field
+    const details = {
+      apiKeyId: entry.apiKeyId || null,
+      ipAddress: entry.ipAddress || null,
+      userAgent: entry.userAgent || null,
+      path: entry.path,
+      method: entry.method,
+      requestBody: entry.requestBody || null,
+      responseStatus: entry.responseStatus || null,
+      additionalDetails: entry.details || null,
+    };
+
+    // Generate checksum for tamper detection
+    const checksum = generateChecksum(entry.action, details, entry.timestamp);
+
     await pool.query(
-      `INSERT INTO audit_log (
-        action, api_key_id, ip_address, user_agent,
-        path, method, request_body, response_status,
-        details, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      `INSERT INTO audit_log (action, details, checksum, created_at)
+       VALUES ($1, $2, $3, $4)`,
       [
         entry.action,
-        entry.apiKeyId || null,
-        entry.ipAddress || null,
-        entry.userAgent || null,
-        entry.path,
-        entry.method,
-        entry.requestBody ? JSON.stringify(entry.requestBody) : null,
-        entry.responseStatus || null,
-        entry.details || null,
+        JSON.stringify(details),
+        checksum,
         entry.timestamp,
       ]
     );

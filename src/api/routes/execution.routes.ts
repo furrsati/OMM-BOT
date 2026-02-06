@@ -1,7 +1,14 @@
 import { Router } from 'express';
+import { createHash } from 'crypto';
 import { asyncHandler } from '../middleware';
 import { botContextManager } from '../services/bot-context';
 import { getPool } from '../../db/postgres';
+
+// Helper function to generate audit log checksum
+function generateAuditChecksum(action: string, details: object): string {
+  const data = JSON.stringify({ action, details, timestamp: new Date().toISOString() });
+  return createHash('sha256').update(data).digest('hex');
+}
 
 const router = Router();
 
@@ -239,17 +246,19 @@ router.post(
 
     // Log the switch
     try {
+      const switchDetails = {
+        actor: 'api',
+        name,
+        latency: result.latency,
+        timestamp: new Date().toISOString(),
+      };
       await getPool().query(
-        `INSERT INTO audit_log (action, actor, details)
-         VALUES ($1, $2, $3)`,
+        `INSERT INTO audit_log (action, details, checksum, created_at)
+         VALUES ($1, $2, $3, NOW())`,
         [
           'RPC_SWITCH',
-          'api',
-          JSON.stringify({
-            name,
-            latency: result.latency,
-            timestamp: new Date().toISOString(),
-          }),
+          JSON.stringify(switchDetails),
+          generateAuditChecksum('RPC_SWITCH', switchDetails),
         ]
       );
     } catch (logError) {
