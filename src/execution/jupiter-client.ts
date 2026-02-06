@@ -64,6 +64,7 @@ export class JupiterClient {
   private baseUrl: string;
   private quoteCache: Map<string, { quote: SwapQuote; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 5000; // 5 seconds
+  private readonly MAX_CACHE_SIZE = 50; // Limit cache size to prevent memory bloat
 
   constructor() {
     this.baseUrl = process.env.JUPITER_API_URL || 'https://quote-api.jup.ag/v6';
@@ -130,7 +131,15 @@ export class JupiterClient {
         quoteResponse: quoteData,
       };
 
-      // Cache the quote
+      // Cache the quote (with size limit enforcement)
+      if (this.quoteCache.size >= this.MAX_CACHE_SIZE) {
+        // Remove oldest entries
+        const entries = Array.from(this.quoteCache.entries())
+          .sort((a, b) => a[1].timestamp - b[1].timestamp);
+        for (let i = 0; i < Math.ceil(this.MAX_CACHE_SIZE * 0.2); i++) {
+          this.quoteCache.delete(entries[i][0]);
+        }
+      }
       this.quoteCache.set(cacheKey, { quote, timestamp: Date.now() });
 
       logger.info('Jupiter quote received', {

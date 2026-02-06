@@ -42,6 +42,11 @@ export class PriceFeed {
   private monitoredTokens: Set<string> = new Set();
   private isRunning: boolean = false;
 
+  // Memory management limits
+  private readonly MAX_PRICE_CACHE_SIZE = 200;
+  private readonly MAX_MONITORED_TOKENS = 100;
+  private readonly CACHE_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+
   constructor(connection: Connection) {
     this.connection = connection;
   }
@@ -67,6 +72,9 @@ export class PriceFeed {
    */
   stop(): void {
     this.isRunning = false;
+    // Clear caches to free memory
+    this.priceCache.clear();
+    this.monitoredTokens.clear();
     logger.info('Price feed stopped');
   }
 
@@ -74,6 +82,16 @@ export class PriceFeed {
    * Add token to monitoring
    */
   addToken(tokenAddress: string): void {
+    // Enforce size limit - remove oldest tokens if at capacity
+    if (this.monitoredTokens.size >= this.MAX_MONITORED_TOKENS && !this.monitoredTokens.has(tokenAddress)) {
+      const oldestToken = this.monitoredTokens.values().next().value;
+      if (oldestToken) {
+        this.monitoredTokens.delete(oldestToken);
+        this.priceCache.delete(oldestToken);
+        logger.debug(`Evicted oldest token ${oldestToken.slice(0, 8)}... to make room`);
+      }
+    }
+
     if (!this.monitoredTokens.has(tokenAddress)) {
       this.monitoredTokens.add(tokenAddress);
       logger.debug(`Added token ${tokenAddress.slice(0, 8)}... to price monitoring`);
@@ -85,7 +103,39 @@ export class PriceFeed {
    */
   removeToken(tokenAddress: string): void {
     this.monitoredTokens.delete(tokenAddress);
+    this.priceCache.delete(tokenAddress);
     logger.debug(`Removed token ${tokenAddress.slice(0, 8)}... from price monitoring`);
+  }
+
+  /**
+   * Cleanup expired cache entries
+   */
+  private cleanupCache(): void {
+    const now = Date.now();
+    let removed = 0;
+
+    for (const [address, price] of this.priceCache.entries()) {
+      if (now - price.timestamp > this.CACHE_EXPIRY_MS) {
+        this.priceCache.delete(address);
+        removed++;
+      }
+    }
+
+    // Also enforce size limit on cache
+    if (this.priceCache.size > this.MAX_PRICE_CACHE_SIZE) {
+      const excess = this.priceCache.size - this.MAX_PRICE_CACHE_SIZE;
+      const entries = Array.from(this.priceCache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp); // Oldest first
+
+      for (let i = 0; i < excess; i++) {
+        this.priceCache.delete(entries[i][0]);
+        removed++;
+      }
+    }
+
+    if (removed > 0) {
+      logger.debug(`Price cache cleanup: removed ${removed} entries, ${this.priceCache.size} remaining`);
+    }
   }
 
   /**
@@ -179,6 +229,8 @@ export class PriceFeed {
    * Price update loop
    */
   private async updateLoop(): Promise<void> {
+    let loopCount = 0;
+
     while (this.isRunning) {
       try {
         // Update prices for all monitored tokens
@@ -187,6 +239,12 @@ export class PriceFeed {
         );
 
         await Promise.allSettled(updatePromises);
+
+        // Cleanup cache every 6th iteration (~once per minute)
+        loopCount++;
+        if (loopCount % 6 === 0) {
+          this.cleanupCache();
+        }
 
         // Wait before next update
         await this.sleep(this.updateIntervalMs);

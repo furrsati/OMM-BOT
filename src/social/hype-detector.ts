@@ -30,6 +30,10 @@ export class HypeDetector {
   // Cache for holder counts (to calculate growth rate)
   private holderCountCache: Map<string, { count: number; timestamp: number }[]> = new Map();
 
+  // Memory management limits
+  private readonly MAX_CACHED_TOKENS = 50;
+  private readonly MAX_HISTORY_PER_TOKEN = 10;
+
   constructor(connection: Connection) {
     this.connection = connection;
   }
@@ -125,9 +129,21 @@ export class HypeDetector {
       const now = Date.now();
       history.push({ count: currentCount, timestamp: now });
 
-      // Keep only last hour of history
+      // Keep only last hour of history AND limit entries per token
       const oneHourAgo = now - (60 * 60 * 1000);
-      const recentHistory = history.filter(h => h.timestamp > oneHourAgo);
+      let recentHistory = history.filter(h => h.timestamp > oneHourAgo);
+
+      // Enforce per-token limit
+      if (recentHistory.length > this.MAX_HISTORY_PER_TOKEN) {
+        recentHistory = recentHistory.slice(-this.MAX_HISTORY_PER_TOKEN);
+      }
+
+      // Enforce total cache size limit
+      if (this.holderCountCache.size >= this.MAX_CACHED_TOKENS && !this.holderCountCache.has(tokenAddress)) {
+        const oldestKey = this.holderCountCache.keys().next().value;
+        if (oldestKey) this.holderCountCache.delete(oldestKey);
+      }
+
       this.holderCountCache.set(tokenAddress, recentHistory);
 
       // Need at least 2 measurements to calculate rate

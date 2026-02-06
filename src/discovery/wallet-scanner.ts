@@ -53,6 +53,7 @@ const DEX_PROGRAMS = {
 export class WalletScanner {
   private connection: Connection;
   private scanningActive: boolean = false;
+  private performanceUpdateInterval: NodeJS.Timeout | null = null;
 
   constructor(connection: Connection) {
     this.connection = connection;
@@ -95,11 +96,13 @@ export class WalletScanner {
 
     // Run immediately on start
     setTimeout(async () => {
-      await this.updateDiscoveryPerformance();
+      if (this.scanningActive) {
+        await this.updateDiscoveryPerformance();
+      }
     }, 5000); // Wait 5 seconds after start
 
     // Then run every 30 minutes
-    setInterval(async () => {
+    this.performanceUpdateInterval = setInterval(async () => {
       if (this.scanningActive) {
         try {
           await this.updateDiscoveryPerformance();
@@ -115,6 +118,13 @@ export class WalletScanner {
    */
   stopScanning(): void {
     this.scanningActive = false;
+
+    // Clear the performance update interval to prevent memory leak
+    if (this.performanceUpdateInterval) {
+      clearInterval(this.performanceUpdateInterval);
+      this.performanceUpdateInterval = null;
+    }
+
     logger.info('Wallet scanner stopped');
   }
 

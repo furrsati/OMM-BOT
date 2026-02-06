@@ -31,8 +31,25 @@ export class BlacklistManager {
   private connection: Connection;
   private cache: Map<string, boolean> = new Map();
 
+  // Memory management
+  private readonly MAX_CACHE_SIZE = 1000;
+
   constructor(connection: Connection) {
     this.connection = connection;
+  }
+
+  /**
+   * Enforce cache size limit
+   */
+  private enforceMemoryLimit(): void {
+    if (this.cache.size > this.MAX_CACHE_SIZE) {
+      // Remove oldest entries (first 20%)
+      const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
+      const keys = Array.from(this.cache.keys()).slice(0, toRemove);
+      for (const key of keys) {
+        this.cache.delete(key);
+      }
+    }
   }
 
   /**
@@ -387,6 +404,9 @@ export class BlacklistManager {
       for (const row of result.rows) {
         this.cache.set(row.address, true);
       }
+
+      // Enforce memory limit after loading
+      this.enforceMemoryLimit();
 
       logger.info(`Loaded ${result.rows.length} blacklist entries to cache`);
 

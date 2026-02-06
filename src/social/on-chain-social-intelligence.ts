@@ -67,8 +67,44 @@ export class OnChainSocialIntelligence {
   // Known bad wallets (rugs, scammers)
   private knownBadWallets: Set<string> = new Set();
 
+  // Memory management limits
+  private readonly MAX_WALLET_RELATIONSHIPS = 200;
+  private readonly MAX_KNOWN_WALLETS = 500;
+
   constructor(connection: Connection) {
     this.connection = connection;
+  }
+
+  /**
+   * Enforce size limits on in-memory collections
+   */
+  private enforceMemoryLimits(): void {
+    // Limit wallet relationships
+    if (this.walletRelationships.size > this.MAX_WALLET_RELATIONSHIPS) {
+      const entries = Array.from(this.walletRelationships.keys());
+      const toRemove = entries.slice(0, entries.length - this.MAX_WALLET_RELATIONSHIPS);
+      for (const key of toRemove) {
+        this.walletRelationships.delete(key);
+      }
+    }
+
+    // Limit known good wallets
+    if (this.knownGoodWallets.size > this.MAX_KNOWN_WALLETS) {
+      const entries = Array.from(this.knownGoodWallets);
+      const toRemove = entries.slice(0, entries.length - this.MAX_KNOWN_WALLETS);
+      for (const key of toRemove) {
+        this.knownGoodWallets.delete(key);
+      }
+    }
+
+    // Limit known bad wallets
+    if (this.knownBadWallets.size > this.MAX_KNOWN_WALLETS) {
+      const entries = Array.from(this.knownBadWallets);
+      const toRemove = entries.slice(0, entries.length - this.MAX_KNOWN_WALLETS);
+      for (const key of toRemove) {
+        this.knownBadWallets.delete(key);
+      }
+    }
   }
 
   /**
@@ -77,6 +113,9 @@ export class OnChainSocialIntelligence {
    */
   async getOnChainSocialScore(tokenAddress: string): Promise<OnChainSocialScore> {
     logger.info('Analyzing on-chain social intelligence', { tokenAddress });
+
+    // Enforce memory limits before processing
+    this.enforceMemoryLimits();
 
     try {
       // Get all recent buyers (last 15 minutes)

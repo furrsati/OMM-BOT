@@ -31,6 +31,11 @@ export class WalletManager {
   private scorer: WalletScorer;
   private watchlist: Map<string, SmartWallet> = new Map();
   private walletStats: Map<string, WalletStats> = new Map();
+  private maintenanceInterval: NodeJS.Timeout | null = null;
+
+  // Memory management limits
+  private readonly MAX_WATCHLIST_SIZE = 150;
+  private readonly MAX_WALLET_STATS = 200;
 
   constructor(connection: Connection) {
     this.connection = connection;
@@ -72,10 +77,46 @@ export class WalletManager {
     // Run immediately on start
     await this.performWeeklyMaintenance();
 
-    // Then run every 7 days
-    setInterval(async () => {
+    // Then run every 7 days (store interval for cleanup)
+    this.maintenanceInterval = setInterval(async () => {
       await this.performWeeklyMaintenance();
     }, 7 * 24 * 60 * 60 * 1000);
+  }
+
+  /**
+   * Stop maintenance and cleanup
+   */
+  stop(): void {
+    if (this.maintenanceInterval) {
+      clearInterval(this.maintenanceInterval);
+      this.maintenanceInterval = null;
+    }
+    // Clear in-memory caches
+    this.watchlist.clear();
+    this.walletStats.clear();
+    logger.info('Wallet Manager stopped');
+  }
+
+  /**
+   * Enforce memory limits on in-memory collections
+   */
+  private enforceMemoryLimits(): void {
+    // Limit watchlist size
+    if (this.watchlist.size > this.MAX_WATCHLIST_SIZE) {
+      const entries = Array.from(this.watchlist.entries())
+        .sort((a, b) => (b[1].score || 0) - (a[1].score || 0));
+      this.watchlist.clear();
+      entries.slice(0, this.MAX_WATCHLIST_SIZE).forEach(([k, v]) => this.watchlist.set(k, v));
+    }
+
+    // Limit wallet stats
+    if (this.walletStats.size > this.MAX_WALLET_STATS) {
+      const entries = Array.from(this.walletStats.keys());
+      const toRemove = entries.slice(0, entries.length - this.MAX_WALLET_STATS);
+      for (const key of toRemove) {
+        this.walletStats.delete(key);
+      }
+    }
   }
 
   /**
@@ -116,6 +157,9 @@ export class WalletManager {
       // Step 7: Keep only top performers (max 100 wallets)
       logger.info('Pruning to top performers...');
       await this.pruneToTopPerformers();
+
+      // Step 8: Enforce memory limits on in-memory collections
+      this.enforceMemoryLimits();
 
       logger.info('✅ Weekly maintenance complete', {
         watchlistSize: this.watchlist.size,

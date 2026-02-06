@@ -11,7 +11,7 @@ class CacheManager {
   private memoryCache: Map<string, { value: any; expiresAt: number }> = new Map();
 
   // Memory management - prevent unbounded cache growth
-  private readonly MAX_MEMORY_CACHE_SIZE = 1000;
+  private readonly MAX_MEMORY_CACHE_SIZE = 500; // Reduced from 1000 to keep RAM under 1.8GB
 
   async initialize(): Promise<void> {
     try {

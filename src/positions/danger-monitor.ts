@@ -70,6 +70,10 @@ export class DangerMonitor {
   private readonly SELL_PRESSURE_THRESHOLD = 0.80; // 80% sells
   private readonly SELL_PRESSURE_DURATION = 3; // 3 consecutive minutes
 
+  // Memory management limits
+  private readonly MAX_HOLDER_HISTORY_ENTRIES = 20; // Keep only 20 entries per token
+  private readonly MAX_MONITORING_POSITIONS = 50; // Max positions to monitor
+
   constructor(connection: Connection, walletManager: WalletManager, priceFeed: PriceFeed) {
     this.connection = connection;
     this.walletManager = walletManager;
@@ -98,6 +102,15 @@ export class DangerMonitor {
    * Start monitoring a position for danger signals
    */
   async startMonitoring(position: PositionData, initialLiquidity: number, initialHolderCount: number): Promise<void> {
+    // Enforce size limit - evict oldest position if at capacity
+    if (this.monitoringData.size >= this.MAX_MONITORING_POSITIONS) {
+      const oldestKey = this.monitoringData.keys().next().value;
+      if (oldestKey) {
+        this.monitoringData.delete(oldestKey);
+        logger.debug(`Evicted oldest monitoring position to make room`);
+      }
+    }
+
     const monitoringData: PositionMonitoringData = {
       tokenAddress: position.tokenAddress,
       initialLiquidity,
@@ -444,9 +457,14 @@ export class DangerMonitor {
       // Update holder history
       data.holderHistory.push({ time: Date.now(), count: currentHolderCount });
 
-      // Keep only last 10 minutes of history
+      // Keep only last 10 minutes of history AND enforce size cap
       const tenMinutesAgo = Date.now() - (10 * 60 * 1000);
       data.holderHistory = data.holderHistory.filter(h => h.time > tenMinutesAgo);
+
+      // Hard cap to prevent memory bloat
+      if (data.holderHistory.length > this.MAX_HOLDER_HISTORY_ENTRIES) {
+        data.holderHistory = data.holderHistory.slice(-this.MAX_HOLDER_HISTORY_ENTRIES);
+      }
 
       data.lastHolderCheck = Date.now();
 
