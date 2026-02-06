@@ -19,20 +19,12 @@ CREATE INDEX IF NOT EXISTS idx_smart_wallets_performance ON smart_wallets(tier, 
 CREATE INDEX IF NOT EXISTS idx_positions_open_by_created ON positions(created_at DESC) WHERE status = 'OPEN';
 CREATE INDEX IF NOT EXISTS idx_trades_recent_outcomes ON trades(outcome, pnl_percent) WHERE created_at > NOW() - INTERVAL '30 days';
 
--- Analyze tables for query planner optimization
-ANALYZE trades;
-ANALYZE positions;
-ANALYZE smart_wallets;
-ANALYZE learning_cycles;
-ANALYZE trade_fingerprints;
-ANALYZE danger_patterns;
-ANALYZE win_patterns;
-
--- Vacuum to reclaim space and update stats
-VACUUM ANALYZE trades;
-VACUUM ANALYZE positions;
-VACUUM ANALYZE smart_wallets;
-VACUUM ANALYZE learning_cycles;
+-- NOTE: ANALYZE and VACUUM commands removed from migration
+-- These cannot run inside a transaction block
+-- Run manually if needed:
+--   ANALYZE trades;
+--   VACUUM ANALYZE trades;
+--   etc.
 
 -- Success message
 DO $$

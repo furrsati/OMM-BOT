@@ -2,7 +2,16 @@
 -- Add missing columns to smart_wallets and create wallet_stats table
 
 -- Update smart_wallets table
-ALTER TABLE smart_wallets RENAME COLUMN wallet_address TO address;
+-- Rename wallet_address to address ONLY if wallet_address exists (idempotent)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'smart_wallets' AND column_name = 'wallet_address'
+  ) THEN
+    ALTER TABLE smart_wallets RENAME COLUMN wallet_address TO address;
+  END IF;
+END $$;
 
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS total_trades INT DEFAULT 0;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS successful_trades INT DEFAULT 0;
