@@ -237,7 +237,7 @@ export class WalletScorer {
       }>(
         `SELECT tokens_entered, COALESCE(tokens_won, 0) as tokens_won, last_active,
                 win_rate, average_return, COALESCE(avg_peak_multiplier, 0) as avg_peak_multiplier
-         FROM smart_wallets WHERE address = $1`,
+         FROM smart_wallets WHERE wallet_address = $1`,
         [walletAddress]
       );
 
@@ -453,11 +453,10 @@ export class WalletScorer {
       for (const wallet of wallets) {
         await query(`
           INSERT INTO smart_wallets (
-            id, address, tier, score, win_rate, average_return,
-            tokens_entered, last_active, total_trades,
-            successful_trades, average_hold_time, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-          ON CONFLICT (address)
+            id, wallet_address, tier, score, win_rate, average_return,
+            tokens_entered, last_active, metrics, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          ON CONFLICT (wallet_address)
           DO UPDATE SET
             tier = $3,
             score = $4,
@@ -465,22 +464,22 @@ export class WalletScorer {
             average_return = $6,
             tokens_entered = $7,
             last_active = $8,
-            total_trades = $9,
-            successful_trades = $10,
-            average_hold_time = $11,
+            metrics = $9,
             updated_at = NOW()
         `, [
           randomUUID(),
           wallet.address,
           Math.round(wallet.tier),
-          Math.round(wallet.score), // Round score to integer for DB
+          Math.round(wallet.score),
           wallet.winRate,
           wallet.averageReturn,
-          Math.round(wallet.tokensEntered), // Ensure integer
+          Math.round(wallet.tokensEntered),
           wallet.lastActive,
-          Math.round(wallet.metrics.totalTrades), // Ensure integer
-          Math.round(wallet.metrics.successfulTrades), // Ensure integer
-          Math.round(wallet.metrics.averageHoldTime || 0) // Round to integer for DB
+          JSON.stringify({
+            totalTrades: Math.round(wallet.metrics.totalTrades),
+            successfulTrades: Math.round(wallet.metrics.successfulTrades),
+            averageHoldTime: Math.round(wallet.metrics.averageHoldTime || 0)
+          })
         ]);
       }
 
@@ -499,11 +498,11 @@ export class WalletScorer {
     try {
       // Get wallets from smart_wallets table (all active wallets)
       const walletsResult = await query<{ address: string }>(
-        `SELECT address FROM (
-           SELECT DISTINCT ON (address) address, last_active
+        `SELECT wallet_address as address FROM (
+           SELECT DISTINCT ON (wallet_address) wallet_address, last_active
            FROM smart_wallets
            WHERE is_active = true
-           ORDER BY address, last_active DESC
+           ORDER BY wallet_address, last_active DESC
          ) sub
          ORDER BY last_active DESC
          LIMIT 200`

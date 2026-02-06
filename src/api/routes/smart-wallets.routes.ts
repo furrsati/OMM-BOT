@@ -135,7 +135,7 @@ router.post(
 
     // Check if wallet already exists
     const existing = await getPool().query(
-      `SELECT id FROM smart_wallets WHERE address = $1`,
+      `SELECT id FROM smart_wallets WHERE wallet_address = $1`,
       [address]
     );
 
@@ -150,11 +150,10 @@ router.post(
     const walletId = randomUUID();
     const result = await getPool().query(
       `INSERT INTO smart_wallets
-       (id, address, tier, notes, score, win_rate, average_return, tokens_entered,
-        total_trades, successful_trades, average_hold_time, is_active, is_crowded,
-        last_active, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 50, 0, 0, 0, 0, 0, 0, true, false, NOW(), NOW(), NOW())
-       RETURNING id, address, tier, score, created_at`,
+       (id, wallet_address, tier, notes, score, win_rate, average_return, tokens_entered,
+        metrics, is_active, is_crowded, last_active, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 50, 0, 0, 0, '{}', true, false, NOW(), NOW(), NOW())
+       RETURNING id, wallet_address as address, tier, score, created_at`,
       [walletId, address, tier, notes || null]
     );
 
@@ -297,7 +296,7 @@ router.post(
       try {
         // Check if wallet already exists
         const existing = await getPool().query(
-          `SELECT id, is_active FROM smart_wallets WHERE address = $1`,
+          `SELECT id, is_active FROM smart_wallets WHERE wallet_address = $1`,
           [wallet.address]
         );
 
@@ -307,7 +306,7 @@ router.post(
             await getPool().query(
               `UPDATE smart_wallets
                SET is_active = true, tier = $2, notes = $3, updated_at = NOW()
-               WHERE address = $1`,
+               WHERE wallet_address = $1`,
               [wallet.address, wallet.tier || 2, wallet.notes || null]
             );
             results.imported++;
@@ -320,10 +319,9 @@ router.post(
         // Insert new wallet with explicit UUID and all required columns
         await getPool().query(
           `INSERT INTO smart_wallets
-           (id, address, tier, notes, score, win_rate, average_return, is_active, last_active,
-            tokens_entered, total_trades, successful_trades, average_hold_time, is_crowded,
-            created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, 0, true, NOW(), 0, 0, 0, 0, false, NOW(), NOW())`,
+           (id, wallet_address, tier, notes, score, win_rate, average_return, is_active, last_active,
+            tokens_entered, metrics, is_crowded, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 0, true, NOW(), 0, '{}', false, NOW(), NOW())`,
           [
             randomUUID(),
             wallet.address,

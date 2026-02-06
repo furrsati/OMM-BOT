@@ -160,7 +160,7 @@ export class SignalTracker {
       // Get all tracked smart wallets
       const smartWallets = this.walletManager.getWatchlist();
       if (smartWallets.length === 0) {
-        logger.debug('No smart wallets to monitor');
+        logger.warn('No smart wallets to monitor - watchlist is empty');
         return;
       }
 

@@ -1232,8 +1232,8 @@ export class WalletScanner {
         const tokenInfo = tokenPrices.get(buyer.tokenAddress);
 
         // Check if wallet already exists in smart_wallets table
-        const existingResult = await query<{ address: string; tokens_entered: number }>(
-          `SELECT address, tokens_entered FROM smart_wallets WHERE address = $1`,
+        const existingResult = await query<{ wallet_address: string; tokens_entered: number }>(
+          `SELECT wallet_address, tokens_entered FROM smart_wallets WHERE wallet_address = $1`,
           [buyer.walletAddress]
         );
 
@@ -1244,16 +1244,17 @@ export class WalletScanner {
              SET tokens_entered = tokens_entered + 1,
                  last_active = NOW(),
                  updated_at = NOW()
-             WHERE address = $1`,
+             WHERE wallet_address = $1`,
             [buyer.walletAddress]
           );
         } else {
           // Insert new wallet as Tier 3 (unproven, needs scoring)
           await query(
             `INSERT INTO smart_wallets
-             (id, address, tier, score, win_rate, average_return, tokens_entered, last_active, total_trades, successful_trades, average_hold_time, is_active, created_at, updated_at)
-             VALUES ($1, $2, 3, 0, 0, 0, 1, NOW(), 0, 0, 0, true, NOW(), NOW())
-             ON CONFLICT (address) DO UPDATE
+             (id, wallet_address, tier, score, win_rate, average_return, tokens_entered,
+              last_active, metrics, is_active, created_at, updated_at)
+             VALUES ($1, $2, 3, 0, 0, 0, 1, NOW(), '{}', true, NOW(), NOW())
+             ON CONFLICT (wallet_address) DO UPDATE
              SET tokens_entered = smart_wallets.tokens_entered + 1,
                  last_active = NOW(),
                  updated_at = NOW()`,
@@ -1426,9 +1427,9 @@ export class WalletScanner {
     try {
       // Get all wallets that have no discoveries
       const walletsResult = await query<{ address: string }>(
-        `SELECT sw.address
+        `SELECT sw.wallet_address as address
          FROM smart_wallets sw
-         LEFT JOIN wallet_discoveries wd ON sw.address = wd.wallet_address
+         LEFT JOIN wallet_discoveries wd ON sw.wallet_address = wd.wallet_address
          WHERE sw.is_active = true
          AND wd.id IS NULL
          LIMIT 50`

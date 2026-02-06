@@ -22,7 +22,8 @@ import { WalletManager } from '../discovery/wallet-manager';
 import { ExecutionManager } from '../execution/execution-manager';
 import { LearningScheduler } from '../learning/learning-scheduler';
 import { BuyExecutionResult } from '../execution/buy-executor';
-import { Position } from '../types';
+import { Position, Trade, TradeFingerprint } from '../types';
+import { query } from '../db/postgres';
 
 export class PositionManager {
   private connection: Connection;
@@ -263,8 +264,8 @@ export class PositionManager {
       this.dangerMonitor.stopMonitoring(position.tokenAddress);
       this.priceFeed.removeToken(position.tokenAddress);
 
-      // Update metrics
-      this.updateMetricsAfterTrade(position, 'EMERGENCY');
+      // Update metrics and feed to Learning Engine
+      await this.updateMetricsAfterTrade(position, 'danger_signal', position.currentPrice || 0);
 
     } catch (error: any) {
       logger.error('Failed to execute emergency exit', {
@@ -306,9 +307,11 @@ export class PositionManager {
       this.dangerMonitor.stopMonitoring(position.tokenAddress);
       this.priceFeed.removeToken(position.tokenAddress);
 
-      // Update metrics
-      const outcome = position.pnlPercent > 0 ? 'WIN' : 'LOSS';
-      this.updateMetricsAfterTrade(position, outcome);
+      // Update metrics and feed to Learning Engine
+      const exitReason = stopCheck.stopType === 'trailing' ? 'trailing_stop'
+                       : stopCheck.stopType === 'time' ? 'time_stop'
+                       : 'stop_loss';
+      await this.updateMetricsAfterTrade(position, exitReason as any, position.currentPrice || 0);
 
     } catch (error: any) {
       logger.error('Failed to execute stop-loss', {
@@ -366,7 +369,8 @@ export class PositionManager {
         this.dangerMonitor.stopMonitoring(position.tokenAddress);
         this.priceFeed.removeToken(position.tokenAddress);
 
-        this.updateMetricsAfterTrade(position, 'WIN');
+        // Update metrics and feed to Learning Engine
+        await this.updateMetricsAfterTrade(position, 'take_profit', position.currentPrice || 0);
       }
 
     } catch (error: any) {
@@ -404,23 +408,134 @@ export class PositionManager {
   }
 
   /**
-   * Update metrics after trade completion
+   * Build a complete Trade object from closed position
+   * This is the critical bridge between position management and learning engine
    */
-  private updateMetricsAfterTrade(position: PositionData, outcome: string): void {
+  private async buildTradeFromPosition(
+    position: PositionData,
+    exitReason: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'time_stop' | 'danger_signal' | 'manual',
+    exitPrice: number
+  ): Promise<Trade> {
+    // Determine outcome based on P&L and exit reason
+    let outcome: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'EMERGENCY' | 'RUG';
+
+    if (exitReason === 'danger_signal') {
+      // Check if this was a rug (massive loss with danger signal)
+      outcome = position.pnlPercent < -50 ? 'RUG' : 'EMERGENCY';
+    } else if (position.pnlPercent > 5) {
+      outcome = 'WIN';
+    } else if (position.pnlPercent < -5) {
+      outcome = 'LOSS';
+    } else {
+      outcome = 'BREAKEVEN';
+    }
+
+    // Build fingerprint with available position data
+    const fingerprint: TradeFingerprint = {
+      smartWallets: {
+        count: position.smartWalletsInPosition?.length || 0,
+        tiers: [],
+        addresses: position.smartWalletsInPosition || []
+      },
+      tokenSafety: {
+        overallScore: 0,
+        liquidityLocked: false,
+        liquidityDepth: 0,
+        honeypotRisk: false,
+        mintAuthority: false,
+        freezeAuthority: false
+      },
+      marketConditions: {
+        solPrice: 0,
+        solTrend: 'stable',
+        btcTrend: 'stable',
+        regime: 'FULL',
+        timeOfDay: new Date().getHours(),
+        dayOfWeek: new Date().getDay()
+      },
+      socialSignals: {
+        twitterFollowers: 0,
+        telegramMembers: 0,
+        mentionVelocity: 0
+      },
+      entryQuality: {
+        dipDepth: 0,
+        distanceFromATH: 0,
+        tokenAge: 0,
+        buySellRatio: 0,
+        hypePhase: 'DISCOVERY'
+      }
+    };
+
+    return {
+      id: position.id || crypto.randomUUID(),
+      tokenAddress: position.tokenAddress,
+      entryPrice: position.entryPrice,
+      entryAmount: position.entryAmount,
+      entryTime: position.entryTime,
+      exitPrice: exitPrice,
+      exitAmount: position.remainingAmount,
+      exitTime: new Date(),
+      exitReason: exitReason,
+      profitLoss: position.pnlUsd,
+      profitLossPercent: position.pnlPercent,
+      convictionScore: position.entryConviction,
+      fingerprint: fingerprint,
+      outcome: outcome
+    };
+  }
+
+  /**
+   * Update metrics after trade completion AND feed to Learning Engine
+   */
+  private async updateMetricsAfterTrade(
+    position: PositionData,
+    exitReason: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'time_stop' | 'danger_signal' | 'manual',
+    exitPrice: number
+  ): Promise<void> {
     this.totalTrades++;
 
-    if (outcome === 'WIN') {
+    if (position.pnlPercent > 5) {
       this.winningTrades++;
       this.totalWinAmount += Math.abs(position.pnlPercent);
-    } else if (outcome === 'LOSS') {
+    } else if (position.pnlPercent < -5) {
       this.losingTrades++;
       this.totalLossAmount += Math.abs(position.pnlPercent);
     }
 
     this.totalPnL += position.pnlPercent;
 
-    // Feed to Learning Engine (STUB - will implement when Learning Engine is ready)
-    // this.learningScheduler.recordTrade({ ... });
+    // BUILD TRADE AND FEED TO LEARNING ENGINE
+    try {
+      const trade = await this.buildTradeFromPosition(position, exitReason, exitPrice);
+
+      // Update trade outcome in database
+      await query(
+        `UPDATE trades SET
+          exit_price = $1, exit_time = $2, exit_reason = $3,
+          profit_loss = $4, profit_loss_percent = $5, outcome = $6,
+          fingerprint = $7, updated_at = NOW()
+        WHERE token_address = $8 AND exit_time IS NULL`,
+        [trade.exitPrice, trade.exitTime, trade.exitReason,
+         trade.profitLoss, trade.profitLossPercent, trade.outcome,
+         JSON.stringify(trade.fingerprint), trade.tokenAddress]
+      );
+
+      // Feed to Learning Engine
+      await this.learningScheduler.onTradeCompleted(trade);
+
+      logger.info('Trade fed to Learning Engine', {
+        token: position.tokenAddress.slice(0, 8),
+        outcome: trade.outcome,
+        pnl: trade.profitLossPercent?.toFixed(2) + '%'
+      });
+
+    } catch (error: any) {
+      logger.error('Failed to feed trade to Learning Engine', {
+        token: position.tokenAddress.slice(0, 8),
+        error: error.message
+      });
+    }
   }
 
   /**

@@ -282,9 +282,9 @@ export class SignalAggregator {
           tier: number;
           score: number;
         }>(`
-          SELECT address, tier, score
+          SELECT wallet_address as address, tier, score
           FROM smart_wallets
-          WHERE address = ANY($1)
+          WHERE wallet_address = ANY($1)
         `, [walletAddresses]);
 
         const walletMap = new Map(walletDetails.rows.map(w => [w.address, w]));
@@ -306,7 +306,7 @@ export class SignalAggregator {
       } else if (walletAddresses.length > 0) {
         // Calculate average score from known wallets
         const walletDetails = await query<{ score: number }>(`
-          SELECT score FROM smart_wallets WHERE address = ANY($1)
+          SELECT score FROM smart_wallets WHERE wallet_address = ANY($1)
         `, [walletAddresses]);
 
         avgScore = walletDetails.rows.length > 0
