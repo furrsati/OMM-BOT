@@ -367,6 +367,14 @@ export class WalletScorer {
     const tokenPoints = Math.min((performance.tokensEntered.length / 10) * 15, 15);
     score += tokenPoints;
 
+    // Diversity penalty: wallets with < 3 tokens aren't proven
+    // Per CLAUDE.md: "Keep only wallets that hit early entries across 3+ different winning tokens"
+    if (performance.tokensEntered.length < 3) {
+      score -= 15; // Heavy penalty for unproven wallets
+    } else if (performance.wins < 3) {
+      score -= 10; // Penalty for not enough wins across tokens
+    }
+
     // Hold time consistency (0-10 points)
     // Ideal: 4-24 hours
     // Too short (< 1 hour) = possible dump bot = -5 points
@@ -400,19 +408,37 @@ export class WalletScorer {
   }
 
   /**
-   * Assign wallets to tiers based on score ranking
+   * Assign wallets to tiers based on quality requirements (not just ranking)
+   * Per CLAUDE.md:
+   * - Tier 1: "Highest conviction, most consistent, least crowded. These trigger entries alone."
+   * - Tier 2: "Strong but slightly crowded or less consistent. Need 3+ to trigger."
+   * - Tier 3: "Promising but unproven. Used for confirmation only, never as primary signal."
    */
   private assignTiers(wallets: SmartWallet[]): SmartWallet[] {
-    const tier1Size = 20;
-    const tier2Size = 40;
+    let tier1Count = 0;
+    let tier2Count = 0;
+    const tier1Max = 20;
+    const tier2Max = 40;
 
-    for (let i = 0; i < wallets.length; i++) {
-      if (i < tier1Size) {
-        wallets[i].tier = 1;
-      } else if (i < tier1Size + tier2Size) {
-        wallets[i].tier = 2;
-      } else {
-        wallets[i].tier = 3;
+    for (const wallet of wallets) {
+      const wins = wallet.metrics.successfulTrades;
+      const winRate = wallet.winRate;
+
+      // Tier 1: Top performers with proven track record
+      // Must have 5+ wins AND 40%+ win rate to be trusted alone
+      if (tier1Count < tier1Max && wins >= 5 && winRate >= 0.4) {
+        wallet.tier = 1;
+        tier1Count++;
+      }
+      // Tier 2: Strong but need more proof or slightly lower win rate
+      // Must have 3+ wins AND 25%+ win rate
+      else if (tier2Count < tier2Max && wins >= 3 && winRate >= 0.25) {
+        wallet.tier = 2;
+        tier2Count++;
+      }
+      // Tier 3: Promising but unproven - everyone else
+      else {
+        wallet.tier = 3;
       }
     }
 

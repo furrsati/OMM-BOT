@@ -89,6 +89,10 @@ export class WalletManager {
       logger.info('Removing poor performing wallets...');
       await this.removePoorPerformers();
 
+      // Step 1.5: Demote wallets with declining performance
+      logger.info('Checking for declining performance...');
+      await this.demoteDecliningWallets();
+
       // Step 2: Re-score ALL remaining wallets
       logger.info('Re-scoring all wallets...');
       const rescored = await this.scorer.scoreAllWallets();
@@ -127,6 +131,7 @@ export class WalletManager {
    * - Win rate < 10% with 5+ tokens entered (proven bad picker)
    * - No wins after 10+ tokens (unable to find winners)
    * - Average peak multiplier < 1.2x with 5+ tokens (not finding good entries)
+   * - One-hit wonders: < 3 wins with 5+ tokens (not proven per CLAUDE.md)
    */
   private async removePoorPerformers(): Promise<void> {
     try {
@@ -137,6 +142,7 @@ export class WalletManager {
             WHEN tokens_entered >= 5 AND win_rate < 0.10 THEN 'Win rate below 10%'
             WHEN tokens_entered >= 10 AND tokens_won = 0 THEN 'No wins after 10+ tokens'
             WHEN tokens_entered >= 5 AND avg_peak_multiplier < 1.2 THEN 'Avg peak below 1.2x'
+            WHEN tokens_entered >= 5 AND tokens_won < 3 THEN 'One-hit wonder (< 3 wins with 5+ tokens)'
             ELSE 'Poor performance'
           END as reason
          FROM smart_wallets
@@ -145,6 +151,7 @@ export class WalletManager {
            (tokens_entered >= 5 AND win_rate < 0.10)
            OR (tokens_entered >= 10 AND COALESCE(tokens_won, 0) = 0)
            OR (tokens_entered >= 5 AND COALESCE(avg_peak_multiplier, 0) < 1.2)
+           OR (tokens_entered >= 5 AND COALESCE(tokens_won, 0) < 3)
          )`
       );
 
@@ -172,6 +179,57 @@ export class WalletManager {
 
     } catch (error: any) {
       logger.error('Error removing poor performers', { error: error.message });
+    }
+  }
+
+  /**
+   * Demote wallets whose recent performance is declining
+   * Per CLAUDE.md: "Demote wallets whose performance is declining"
+   */
+  private async demoteDecliningWallets(): Promise<void> {
+    try {
+      // Find wallets where recent 7-day win rate is much lower than overall
+      const declining = await query<{ address: string; current_tier: number }>(
+        `SELECT sw.address, sw.tier as current_tier
+         FROM smart_wallets sw
+         WHERE sw.is_active = true
+         AND sw.tier < 3
+         AND EXISTS (
+           SELECT 1 FROM wallet_discoveries wd
+           WHERE wd.wallet_address = sw.address
+           AND wd.entry_time > NOW() - INTERVAL '7 days'
+           GROUP BY wd.wallet_address
+           HAVING COUNT(*) FILTER (WHERE is_winner) * 1.0 / NULLIF(COUNT(*), 0) < sw.win_rate - 0.2
+         )`
+      );
+
+      if (declining.rows.length === 0) {
+        logger.debug('No wallets with declining performance');
+        return;
+      }
+
+      for (const wallet of declining.rows) {
+        const newTier = Math.min(3, wallet.current_tier + 1) as 1 | 2 | 3;
+        await query(
+          `UPDATE smart_wallets SET tier = $2, notes = 'Demoted: Performance declining', updated_at = NOW()
+           WHERE address = $1`,
+          [wallet.address, newTier]
+        );
+
+        // Also update in-memory watchlist
+        const existing = this.watchlist.get(wallet.address);
+        if (existing) {
+          existing.tier = newTier;
+          this.watchlist.set(wallet.address, existing);
+        }
+
+        logger.info(`Demoted wallet ${wallet.address.slice(0, 8)}... from Tier ${wallet.current_tier} to ${newTier}`);
+      }
+
+      logger.info(`✅ Demoted ${declining.rows.length} wallets with declining performance`);
+
+    } catch (error: any) {
+      logger.error('Error demoting declining wallets', { error: error.message });
     }
   }
 

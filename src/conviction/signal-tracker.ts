@@ -219,6 +219,18 @@ export class SignalTracker {
       // Process new token discoveries
       for (const [tokenAddress, data] of tokenPurchases) {
         try {
+          // PRE-FILTER: Skip tokens with only Tier 3 wallet interest
+          // Require at least one Tier 1 or Tier 2 wallet, OR 2+ wallets total
+          const tier1Count = data.walletTiers.filter(t => t === 1).length;
+          const tier2Count = data.walletTiers.filter(t => t === 2).length;
+          const hasQualityWallet = tier1Count > 0 || tier2Count > 0;
+          const hasMultipleWallets = data.walletAddresses.length >= 2;
+
+          if (!hasQualityWallet && !hasMultipleWallets) {
+            logger.debug(`Skipping ${tokenAddress.slice(0, 8)} - only Tier 3 wallets (${data.walletAddresses.length})`);
+            continue;
+          }
+
           // Get token metadata
           const tokenInfo = await this.getTokenInfo(tokenAddress);
 
@@ -1000,7 +1012,7 @@ export class SignalTracker {
         SET status = 'DEAD', rejection_reason = 'Low liquidity (<$5K)'
         WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
         AND (liquidity_usd IS NULL OR liquidity_usd < 5000)
-        AND discovered_at < NOW() - INTERVAL '30 minutes'
+        AND discovered_at < NOW() - INTERVAL '10 minutes'
       `);
 
       // 2. Mark tokens with LOW SAFETY SCORE as DEAD
@@ -1010,17 +1022,17 @@ export class SignalTracker {
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND safety_score IS NOT NULL
         AND safety_score < 40
-        AND discovered_at < NOW() - INTERVAL '30 minutes'
+        AND discovered_at < NOW() - INTERVAL '10 minutes'
       `);
 
-      // 3. Mark tokens with LOW CONVICTION SCORE as DEAD (after 1 hour to analyze)
+      // 3. Mark tokens with LOW CONVICTION SCORE as DEAD (after 20 min to analyze)
       const deadConviction = await query(`
         UPDATE token_opportunities
         SET status = 'DEAD', rejection_reason = 'Low conviction score (<30)'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND conviction_score IS NOT NULL
         AND conviction_score < 30
-        AND discovered_at < NOW() - INTERVAL '1 hour'
+        AND discovered_at < NOW() - INTERVAL '20 minutes'
       `);
 
       // 4. Mark tokens with NO SMART WALLET INTEREST as DEAD
@@ -1029,15 +1041,15 @@ export class SignalTracker {
         SET status = 'DEAD', rejection_reason = 'No smart wallet interest'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND (smart_wallet_count IS NULL OR smart_wallet_count = 0)
-        AND discovered_at < NOW() - INTERVAL '30 minutes'
+        AND discovered_at < NOW() - INTERVAL '15 minutes'
       `);
 
       // 5. Mark tokens with STALE DATA as EXPIRED
       const staleData = await query(`
         UPDATE token_opportunities
-        SET status = 'EXPIRED', rejection_reason = 'Stale data (>2h without update)'
+        SET status = 'EXPIRED', rejection_reason = 'Stale data (>30min without update)'
         WHERE status IN ('ANALYZING', 'WATCHING')
-        AND last_updated < NOW() - INTERVAL '2 hours'
+        AND last_updated < NOW() - INTERVAL '30 minutes'
       `);
 
       // 6. Mark tokens with NO VOLUME as DEAD
@@ -1046,15 +1058,15 @@ export class SignalTracker {
         SET status = 'DEAD', rejection_reason = 'No trading volume (<$1K)'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND (volume_24h IS NULL OR volume_24h < 1000)
-        AND discovered_at < NOW() - INTERVAL '1 hour'
+        AND discovered_at < NOW() - INTERVAL '20 minutes'
       `);
 
-      // 7. Mark old ANALYZING tokens as EXPIRED
+      // 7. Mark old ANALYZING tokens as EXPIRED (30 min timeout)
       const expiredAnalyzing = await query(`
         UPDATE token_opportunities
         SET status = 'EXPIRED', rejection_reason = 'Analysis timeout'
         WHERE status = 'ANALYZING'
-        AND discovered_at < NOW() - INTERVAL '2 hours'
+        AND discovered_at < NOW() - INTERVAL '30 minutes'
       `);
 
       // 8. Mark tokens where PRICE COLLAPSED (>90%) as DEAD
@@ -1074,12 +1086,12 @@ export class SignalTracker {
         AND discovered_at < NOW() - INTERVAL '4 hours'
       `);
 
-      // 10. Mark QUALIFIED but unexecuted tokens as EXPIRED after 2 hours
+      // 10. Mark QUALIFIED but unexecuted tokens as EXPIRED after 30 min
       const expiredQualified = await query(`
         UPDATE token_opportunities
         SET status = 'EXPIRED', rejection_reason = 'Qualified but not executed in time'
         WHERE status = 'QUALIFIED'
-        AND decision_time < NOW() - INTERVAL '2 hours'
+        AND decision_time < NOW() - INTERVAL '30 minutes'
       `);
 
       // 11. DELETE very old entries (older than 7 days)
@@ -1167,11 +1179,50 @@ export class SignalTracker {
       }
 
       // Log remaining active count
-      const activeCount = await query(`
+      const activeCount = await query<{ count: string }>(`
         SELECT COUNT(*) as count FROM token_opportunities
         WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
       `);
-      logger.info(`📊 Active opportunities remaining: ${activeCount.rows[0]?.count || 0}`);
+      const currentCount = parseInt(activeCount.rows[0]?.count || '0');
+      logger.info(`📊 Active opportunities remaining: ${currentCount}`);
+
+      // HARD CAP ENFORCEMENT: Keep only top 30 tokens by conviction score
+      const MAX_TOKENS = 30;
+      if (currentCount > MAX_TOKENS) {
+        const excessCount = currentCount - MAX_TOKENS;
+        logger.warn(`🚨 Token cap exceeded (${currentCount}/${MAX_TOKENS}) - removing ${excessCount} lowest scoring tokens`);
+
+        await query(`
+          DELETE FROM token_opportunities
+          WHERE id IN (
+            SELECT id FROM token_opportunities
+            WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+            ORDER BY conviction_score ASC NULLS FIRST, discovered_at ASC
+            LIMIT $1
+          )
+        `, [excessCount]);
+
+        logger.info(`✅ Hard cap enforced: removed ${excessCount} lowest scoring tokens`);
+      }
+
+      // SYNC IN-MEMORY WITH DATABASE: Remove any tokens from memory not in active DB set
+      const activeTokensResult = await query<{ token_address: string }>(`
+        SELECT token_address FROM token_opportunities
+        WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
+      `);
+      const activeSet = new Set(activeTokensResult.rows.map(r => r.token_address));
+
+      let memorySyncCount = 0;
+      for (const [tokenAddress] of this.trackedOpportunities) {
+        if (!activeSet.has(tokenAddress)) {
+          this.trackedOpportunities.delete(tokenAddress);
+          memorySyncCount++;
+        }
+      }
+
+      if (memorySyncCount > 0) {
+        logger.info(`🔄 Synced in-memory tracking: removed ${memorySyncCount} stale entries`);
+      }
 
     } catch (error: any) {
       logger.error('Error cleaning up dead tokens', { error: error.message });
