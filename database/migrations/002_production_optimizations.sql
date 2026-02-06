@@ -17,7 +17,7 @@ CREATE INDEX IF NOT EXISTS idx_smart_wallets_performance ON smart_wallets(tier, 
 
 -- Partial indexes for hot data
 CREATE INDEX IF NOT EXISTS idx_positions_open_by_created ON positions(created_at DESC) WHERE status = 'OPEN';
-CREATE INDEX IF NOT EXISTS idx_trades_recent_outcomes ON trades(outcome, pnl_percent) WHERE created_at > NOW() - INTERVAL '30 days';
+CREATE INDEX IF NOT EXISTS idx_trades_recent_outcomes ON trades(outcome, pnl_percent, created_at DESC);
 
 -- NOTE: ANALYZE and VACUUM commands removed from migration
 -- These cannot run inside a transaction block

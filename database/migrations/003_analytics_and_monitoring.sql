@@ -39,8 +39,8 @@ CREATE TABLE IF NOT EXISTS system_health_logs (
   metadata JSONB
 );
 
-CREATE INDEX idx_health_logs_timestamp ON system_health_logs(timestamp DESC);
-CREATE INDEX idx_health_logs_component ON system_health_logs(component, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_health_logs_timestamp ON system_health_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_health_logs_component ON system_health_logs(component, timestamp DESC);
 
 -- API request tracking
 CREATE TABLE IF NOT EXISTS api_requests (
@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS api_requests (
   error_message TEXT
 );
 
-CREATE INDEX idx_api_requests_timestamp ON api_requests(timestamp DESC);
-CREATE INDEX idx_api_requests_endpoint ON api_requests(endpoint, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_api_requests_timestamp ON api_requests(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_api_requests_endpoint ON api_requests(endpoint, timestamp DESC);
 
 -- Token performance tracking
 CREATE TABLE IF NOT EXISTS token_performance (
@@ -71,9 +71,9 @@ CREATE TABLE IF NOT EXISTS token_performance (
   metadata JSONB
 );
 
-CREATE INDEX idx_token_performance_address ON token_performance(token_address);
-CREATE INDEX idx_token_performance_analyzed ON token_performance(analyzed_at DESC);
-CREATE INDEX idx_token_performance_outcome ON token_performance(trade_outcome, analyzed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_token_performance_address ON token_performance(token_address);
+CREATE INDEX IF NOT EXISTS idx_token_performance_analyzed ON token_performance(analyzed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_token_performance_outcome ON token_performance(trade_outcome, analyzed_at DESC);
 
 -- Backup and recovery tracking
 CREATE TABLE IF NOT EXISTS backup_logs (
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS backup_logs (
   error_message TEXT
 );
 
-CREATE INDEX idx_backup_logs_completed ON backup_logs(completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_backup_logs_completed ON backup_logs(completed_at DESC);
 
 -- Success message
 DO $$

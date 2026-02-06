@@ -15,7 +15,7 @@ import { Connection, PublicKey, ParsedTransactionWithMeta } from '@solana/web3.j
 import { randomUUID } from 'crypto';
 import { logger, logThinking, logStep, logAnalysis, logCheckpoint } from '../utils/logger';
 import { query } from '../db/postgres';
-import { rateLimitedRPC } from '../utils/rate-limiter';
+import { rateLimitedRPC, getRPCRateLimiter } from '../utils/rate-limiter';
 
 interface TokenPerformance {
   address: string;
@@ -153,13 +153,24 @@ export class WalletScanner {
       }
 
       // Step 2: For each winning token, find early buyers
-      // Process only top 10 tokens to avoid excessive RPC usage
+      // Process only top 3 tokens to stay within memory limits on small instances
       let totalEarlyBuyers = 0;
-      const tokensToProcess = winningTokens.slice(0, 10);
+      const tokensToProcess = winningTokens.slice(0, 3);
       logStep(2, 5, `Processing ${tokensToProcess.length} winning tokens to find early buyers...`);
 
       for (let i = 0; i < tokensToProcess.length; i++) {
         const token = tokensToProcess[i];
+
+        // Backpressure: wait if RPC queue is getting too large
+        const queueLength = getRPCRateLimiter().getQueueLength();
+        if (queueLength > 100) {
+          logger.info(`RPC queue at ${queueLength}, waiting for it to drain...`);
+          while (getRPCRateLimiter().getQueueLength() > 50) {
+            await this.sleep(5000);
+          }
+          logger.info('RPC queue drained, continuing...');
+        }
+
         logThinking('SCANNER', `[${i + 1}/${tokensToProcess.length}] Analyzing ${token.address.slice(0, 8)}... (${token.multiplier.toFixed(1)}x)`);
 
         const earlyBuyers = await this.findEarlyBuyers(token);
@@ -562,11 +573,11 @@ export class WalletScanner {
       const launchTime = token.launchTime;
       const fiveMinutesAfterLaunch = launchTime + 300;
 
-      // Get signatures for the pool address (increased limit for better coverage)
+      // Get signatures for the pool address (reduced to conserve RPC calls)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           poolPubkey,
-          { limit: 1000 },
+          { limit: 200 },
           'confirmed'
         ),
         2 // Higher priority for pool queries
@@ -574,11 +585,11 @@ export class WalletScanner {
 
       logger.debug(`Pool ${token.pairAddress.slice(0, 8)}... has ${signatures.length} signatures`);
 
-      // Filter to first 5 minutes after launch (increased limit for better coverage)
+      // Filter to first 5 minutes after launch (reduced limit to conserve memory)
       const relevantSigs = signatures.filter(sig => {
         if (!sig.blockTime) return false;
         return sig.blockTime >= launchTime && sig.blockTime <= fiveMinutesAfterLaunch;
-      }).slice(0, 100); // Check up to 100 early transactions
+      }).slice(0, 30); // Check up to 30 early transactions (reduced from 100)
 
       logger.debug(`Found ${relevantSigs.length} transactions in first 5 minutes`);
 
@@ -730,8 +741,8 @@ export class WalletScanner {
 
       logger.debug(`Found ${tokenAccounts.length} token holders via Helius`);
 
-      // For each holder, check when they first acquired the token (increased from 20 to 50)
-      for (const account of tokenAccounts.slice(0, 50)) {
+      // For each holder, check when they first acquired the token (reduced to conserve RPC)
+      for (const account of tokenAccounts.slice(0, 15)) {
         const ownerAddress = account.owner;
 
         // Get the owner's transaction history for this token
@@ -739,7 +750,7 @@ export class WalletScanner {
         const ownerSigs = await rateLimitedRPC(
           () => this.connection.getSignaturesForAddress(
             ownerPubkey,
-            { limit: 50 },
+            { limit: 20 },
             'confirmed'
           ),
           0
@@ -809,8 +820,8 @@ export class WalletScanner {
         1
       );
 
-      // Check each large holder for early entry (increased from 10 to 30)
-      for (const account of largestAccounts.value.slice(0, 30)) {
+      // Check each large holder for early entry (reduced to conserve RPC)
+      for (const account of largestAccounts.value.slice(0, 10)) {
         try {
           // Get the token account info to find the owner
           const accountInfo = await rateLimitedRPC(
@@ -828,7 +839,7 @@ export class WalletScanner {
           const ownerSigs = await rateLimitedRPC(
             () => this.connection.getSignaturesForAddress(
               ownerPubkey,
-              { limit: 30 },
+              { limit: 15 },
               'confirmed'
             ),
             0

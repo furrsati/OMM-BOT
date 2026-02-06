@@ -7,7 +7,7 @@
 -- LEARNING WEIGHTS TABLE
 -- Tracks category weight adjustments over time
 -- =====================================================
-CREATE TABLE learning_weights (
+CREATE TABLE IF NOT EXISTS learning_weights (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   version INT NOT NULL,
   weights JSONB NOT NULL,
@@ -18,14 +18,14 @@ CREATE TABLE learning_weights (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_learning_weights_version ON learning_weights(version DESC);
-CREATE INDEX idx_learning_weights_created_at ON learning_weights(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_weights_version ON learning_weights(version DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_weights_created_at ON learning_weights(created_at DESC);
 
 -- =====================================================
 -- LEARNING PARAMETERS TABLE
 -- Tracks parameter tuning adjustments over time
 -- =====================================================
-CREATE TABLE learning_parameters (
+CREATE TABLE IF NOT EXISTS learning_parameters (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   version INT NOT NULL,
   parameter_name VARCHAR(100) NOT NULL,
@@ -37,15 +37,15 @@ CREATE TABLE learning_parameters (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_learning_parameters_version ON learning_parameters(version DESC);
-CREATE INDEX idx_learning_parameters_name ON learning_parameters(parameter_name);
-CREATE INDEX idx_learning_parameters_created_at ON learning_parameters(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_parameters_version ON learning_parameters(version DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_parameters_name ON learning_parameters(parameter_name);
+CREATE INDEX IF NOT EXISTS idx_learning_parameters_created_at ON learning_parameters(created_at DESC);
 
 -- =====================================================
 -- LEARNING META TABLE
 -- Tracks meta-learning evaluations and adjustments
 -- =====================================================
-CREATE TABLE learning_meta (
+CREATE TABLE IF NOT EXISTS learning_meta (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   cycle_id INT NOT NULL,
   cycle_type VARCHAR(50) NOT NULL CHECK (cycle_type IN ('weight_optimization', 'parameter_tuning', 'meta_review', 'full_report')),
@@ -58,16 +58,16 @@ CREATE TABLE learning_meta (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_learning_meta_cycle_id ON learning_meta(cycle_id DESC);
-CREATE INDEX idx_learning_meta_cycle_type ON learning_meta(cycle_type);
-CREATE INDEX idx_learning_meta_improvement ON learning_meta(improvement_flag);
-CREATE INDEX idx_learning_meta_created_at ON learning_meta(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_meta_cycle_id ON learning_meta(cycle_id DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_meta_cycle_type ON learning_meta(cycle_type);
+CREATE INDEX IF NOT EXISTS idx_learning_meta_improvement ON learning_meta(improvement_flag);
+CREATE INDEX IF NOT EXISTS idx_learning_meta_created_at ON learning_meta(created_at DESC);
 
 -- =====================================================
 -- LEARNING CYCLES TABLE
 -- Tracks when each learning cycle ran
 -- =====================================================
-CREATE TABLE learning_cycles (
+CREATE TABLE IF NOT EXISTS learning_cycles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   cycle_number INT NOT NULL UNIQUE,
   cycle_type VARCHAR(50) NOT NULL,
@@ -80,16 +80,16 @@ CREATE TABLE learning_cycles (
   completed_at TIMESTAMP
 );
 
-CREATE INDEX idx_learning_cycles_cycle_number ON learning_cycles(cycle_number DESC);
-CREATE INDEX idx_learning_cycles_cycle_type ON learning_cycles(cycle_type);
-CREATE INDEX idx_learning_cycles_status ON learning_cycles(status);
-CREATE INDEX idx_learning_cycles_created_at ON learning_cycles(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_cycles_cycle_number ON learning_cycles(cycle_number DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_cycles_cycle_type ON learning_cycles(cycle_type);
+CREATE INDEX IF NOT EXISTS idx_learning_cycles_status ON learning_cycles(status);
+CREATE INDEX IF NOT EXISTS idx_learning_cycles_created_at ON learning_cycles(created_at DESC);
 
 -- =====================================================
 -- FROZEN PARAMETERS TABLE
 -- Tracks parameters that operator has locked
 -- =====================================================
-CREATE TABLE frozen_parameters (
+CREATE TABLE IF NOT EXISTS frozen_parameters (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   parameter_name VARCHAR(100) NOT NULL UNIQUE,
   frozen_value JSONB NOT NULL,
@@ -98,7 +98,7 @@ CREATE TABLE frozen_parameters (
   frozen_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_frozen_parameters_name ON frozen_parameters(parameter_name);
+CREATE INDEX IF NOT EXISTS idx_frozen_parameters_name ON frozen_parameters(parameter_name);
 
 -- =====================================================
 -- LEARNING STATISTICS VIEW

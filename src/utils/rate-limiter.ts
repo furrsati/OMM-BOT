@@ -21,6 +21,7 @@ interface QueuedRequest<T> {
   resolve: (value: T) => void;
   reject: (error: Error) => void;
   priority: number;
+  retryCount: number;
 }
 
 export class RateLimiter {
@@ -69,7 +70,7 @@ export class RateLimiter {
         }
       }
 
-      this.queue.push({ execute: fn, resolve, reject, priority });
+      this.queue.push({ execute: fn, resolve, reject, priority, retryCount: 0 });
 
       // Sort by priority (higher = more important)
       this.queue.sort((a, b) => b.priority - a.priority);
@@ -120,12 +121,21 @@ export class RateLimiter {
       } catch (error: any) {
         // Check for rate limit error from RPC
         if (error.message?.includes('429') || error.message?.includes('Too Many Requests')) {
-          logger.warn(`[${this.name}] RPC rate limit hit, backing off...`);
-          // Reduce tokens significantly on rate limit
-          this.tokens = Math.min(this.tokens, 0);
-          // Re-queue the request with slight delay
-          await this.sleep(2000);
-          this.queue.unshift(request);
+          const MAX_RETRIES = 2;
+          if (request.retryCount < MAX_RETRIES) {
+            request.retryCount++;
+            // Exponential backoff: 2s, 4s
+            const backoffMs = 2000 * Math.pow(2, request.retryCount - 1);
+            logger.warn(`[${this.name}] RPC rate limit hit, retry ${request.retryCount}/${MAX_RETRIES} after ${backoffMs}ms...`);
+            // Reduce tokens significantly on rate limit
+            this.tokens = Math.min(this.tokens, 0);
+            await this.sleep(backoffMs);
+            this.queue.unshift(request);
+          } else {
+            // Max retries reached - reject to prevent infinite queue growth
+            logger.error(`[${this.name}] RPC rate limit: max retries (${MAX_RETRIES}) exceeded, rejecting request`);
+            request.reject(new Error(`Rate limited after ${MAX_RETRIES} retries`));
+          }
         } else {
           request.reject(error);
         }
