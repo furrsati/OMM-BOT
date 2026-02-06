@@ -1009,7 +1009,7 @@ export class SignalTracker {
       // 1. Mark tokens with LOW LIQUIDITY as DEAD (threshold raised to $5K)
       const deadLiquidity = await query(`
         UPDATE token_opportunities
-        SET status = 'DEAD', rejection_reason = 'Low liquidity (<$5K)'
+        SET status = 'REJECTED', rejection_reason = 'Low liquidity (<$5K)'
         WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
         AND (liquidity_usd IS NULL OR liquidity_usd < 5000)
         AND discovered_at < NOW() - INTERVAL '10 minutes'
@@ -1018,7 +1018,7 @@ export class SignalTracker {
       // 2. Mark tokens with LOW SAFETY SCORE as DEAD
       const deadSafety = await query(`
         UPDATE token_opportunities
-        SET status = 'DEAD', rejection_reason = 'Low safety score (<40)'
+        SET status = 'REJECTED', rejection_reason = 'Low safety score (<40)'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND safety_score IS NOT NULL
         AND safety_score < 40
@@ -1028,7 +1028,7 @@ export class SignalTracker {
       // 3. Mark tokens with LOW CONVICTION SCORE as DEAD (after 20 min to analyze)
       const deadConviction = await query(`
         UPDATE token_opportunities
-        SET status = 'DEAD', rejection_reason = 'Low conviction score (<30)'
+        SET status = 'REJECTED', rejection_reason = 'Low conviction score (<30)'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND conviction_score IS NOT NULL
         AND conviction_score < 30
@@ -1038,7 +1038,7 @@ export class SignalTracker {
       // 4. Mark tokens with NO SMART WALLET INTEREST as DEAD
       const deadNoWallets = await query(`
         UPDATE token_opportunities
-        SET status = 'DEAD', rejection_reason = 'No smart wallet interest'
+        SET status = 'REJECTED', rejection_reason = 'No smart wallet interest'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND (smart_wallet_count IS NULL OR smart_wallet_count = 0)
         AND discovered_at < NOW() - INTERVAL '15 minutes'
@@ -1055,7 +1055,7 @@ export class SignalTracker {
       // 6. Mark tokens with NO VOLUME as DEAD
       const deadNoVolume = await query(`
         UPDATE token_opportunities
-        SET status = 'DEAD', rejection_reason = 'No trading volume (<$1K)'
+        SET status = 'REJECTED', rejection_reason = 'No trading volume (<$1K)'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND (volume_24h IS NULL OR volume_24h < 1000)
         AND discovered_at < NOW() - INTERVAL '20 minutes'
@@ -1072,7 +1072,7 @@ export class SignalTracker {
       // 8. Mark tokens where PRICE COLLAPSED (>90%) as DEAD
       const deadPrice = await query(`
         UPDATE token_opportunities
-        SET status = 'DEAD', rejection_reason = 'Price collapsed >90%'
+        SET status = 'REJECTED', rejection_reason = 'Price collapsed >90%'
         WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
         AND ath_price > 0
         AND current_price > 0

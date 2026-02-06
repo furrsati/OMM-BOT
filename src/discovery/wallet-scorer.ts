@@ -472,15 +472,15 @@ export class WalletScorer {
         `, [
           randomUUID(),
           wallet.address,
-          wallet.tier,
-          wallet.score,
+          Math.round(wallet.tier),
+          Math.round(wallet.score), // Round score to integer for DB
           wallet.winRate,
           wallet.averageReturn,
-          wallet.tokensEntered,
+          Math.round(wallet.tokensEntered), // Ensure integer
           wallet.lastActive,
-          wallet.metrics.totalTrades,
-          wallet.metrics.successfulTrades,
-          wallet.metrics.averageHoldTime
+          Math.round(wallet.metrics.totalTrades), // Ensure integer
+          Math.round(wallet.metrics.successfulTrades), // Ensure integer
+          Math.round(wallet.metrics.averageHoldTime || 0) // Round to integer for DB
         ]);
       }
 

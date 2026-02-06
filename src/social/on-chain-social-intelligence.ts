@@ -459,10 +459,9 @@ export class OnChainSocialIntelligence {
    */
   private async checkRugConnection(walletAddress: string): Promise<boolean> {
     try {
-      // Check blacklist table
+      // Check blacklist table (direct match only - connection checking is handled by BlacklistManager)
       const blacklistResult = await query<{ address: string }>(
-        `SELECT address FROM blacklist
-         WHERE address = $1 OR associated_wallets ? $1`,
+        `SELECT address FROM blacklist WHERE address = $1`,
         [walletAddress]
       );
 
