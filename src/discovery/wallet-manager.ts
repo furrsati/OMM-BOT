@@ -33,9 +33,9 @@ export class WalletManager {
   private walletStats: Map<string, WalletStats> = new Map();
   private maintenanceInterval: NodeJS.Timeout | null = null;
 
-  // Memory management limits
-  private readonly MAX_WATCHLIST_SIZE = 150;
-  private readonly MAX_WALLET_STATS = 200;
+  // Memory management limits - reduced for 512MB Render instances
+  private readonly MAX_WATCHLIST_SIZE = 100;
+  private readonly MAX_WALLET_STATS = 100;
 
   constructor(connection: Connection) {
     this.connection = connection;
@@ -54,6 +54,9 @@ export class WalletManager {
 
       // Load wallet stats
       await this.loadWalletStats();
+
+      // Enforce memory limits immediately after loading
+      this.enforceMemoryLimits();
 
       logger.info(`✅ Wallet Manager initialized`, {
         watchlistSize: this.watchlist.size,

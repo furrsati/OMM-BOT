@@ -137,22 +137,38 @@ class PostgresTransport extends Transport {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { level: _level, message: _msg, timestamp: _ts, ...data } = info;
 
+    // Limit data size to prevent memory bloat - truncate large objects
+    let limitedData: any = {};
+    if (Object.keys(data).length > 0) {
+      const dataStr = JSON.stringify(data);
+      if (dataStr.length > 1000) {
+        // Truncate large data objects
+        limitedData = { _truncated: true, preview: dataStr.slice(0, 500) };
+      } else {
+        limitedData = data;
+      }
+    }
+
     const logEntry = {
       level: info.level,
       category,
       message,
-      data: Object.keys(data).length > 0 ? data : {},
+      data: limitedData,
     };
 
     if (this.initialized && this.pool) {
       this.writeToDb(logEntry);
     } else {
-      // Queue the log for later
-      this.queue.push(logEntry);
-      if (this.queue.length > 1000) {
-        // Prevent memory issues, drop oldest logs
-        this.queue.shift();
+      // Queue the log for later - AGGRESSIVE memory limit
+      // Only queue critical logs to prevent memory bloat
+      if (logEntry.level === 'error' || logEntry.level === 'warn' || logEntry.category === 'trade') {
+        this.queue.push(logEntry);
+        if (this.queue.length > 50) {
+          // Very aggressive limit - drop oldest logs
+          this.queue.shift();
+        }
       }
+      // Drop info/debug logs entirely when DB is not ready
     }
 
     callback();

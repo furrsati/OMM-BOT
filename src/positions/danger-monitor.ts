@@ -70,9 +70,9 @@ export class DangerMonitor {
   private readonly SELL_PRESSURE_THRESHOLD = 0.80; // 80% sells
   private readonly SELL_PRESSURE_DURATION = 3; // 3 consecutive minutes
 
-  // Memory management limits
-  private readonly MAX_HOLDER_HISTORY_ENTRIES = 20; // Keep only 20 entries per token
-  private readonly MAX_MONITORING_POSITIONS = 50; // Max positions to monitor
+  // Memory management limits - reduced for 512MB Render instances
+  private readonly MAX_HOLDER_HISTORY_ENTRIES = 10; // Keep only 10 entries per token
+  private readonly MAX_MONITORING_POSITIONS = 20; // Max positions to monitor
 
   constructor(connection: Connection, walletManager: WalletManager, priceFeed: PriceFeed) {
     this.connection = connection;

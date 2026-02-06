@@ -48,9 +48,9 @@ export class SignalTracker {
   private isRunning: boolean = false;
   private intervals: NodeJS.Timeout[] = []; // Track all intervals for cleanup
 
-  // Memory management constants - aggressive to keep RAM under 1.8GB
-  private readonly MAX_TRACKED_OPPORTUNITIES = 30; // Reduced from 50
-  private readonly CLEANUP_RETENTION_MS = 30 * 60 * 1000; // 30 minutes (was 1 hour)
+  // Memory management constants - VERY aggressive for 512MB Render instances
+  private readonly MAX_TRACKED_OPPORTUNITIES = 15; // Reduced from 30 for memory
+  private readonly CLEANUP_RETENTION_MS = 10 * 60 * 1000; // 10 minutes (was 30)
 
   // Callback for approved entries (Phase 5 integration)
   private onEntryApprovedCallback?: (decision: EntryDecision, signal: AggregatedSignal) => void;

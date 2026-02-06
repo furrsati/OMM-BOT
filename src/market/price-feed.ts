@@ -42,10 +42,10 @@ export class PriceFeed {
   private monitoredTokens: Set<string> = new Set();
   private isRunning: boolean = false;
 
-  // Memory management limits
-  private readonly MAX_PRICE_CACHE_SIZE = 200;
-  private readonly MAX_MONITORED_TOKENS = 100;
-  private readonly CACHE_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+  // Memory management limits - reduced for 512MB Render instances
+  private readonly MAX_PRICE_CACHE_SIZE = 50;
+  private readonly MAX_MONITORED_TOKENS = 30;
+  private readonly CACHE_EXPIRY_MS = 2 * 60 * 1000; // 2 minutes
 
   constructor(connection: Connection) {
     this.connection = connection;

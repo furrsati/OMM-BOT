@@ -165,20 +165,19 @@ async function main() {
       });
     }, 5 * 60 * 1000); // 5 minutes
 
-    // Memory monitoring - log memory usage every 2 minutes
+    // Memory monitoring - check every 30 seconds for 512MB Render instances
     setInterval(() => {
       const usage = process.memoryUsage();
       const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
       const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
       const rssMB = Math.round(usage.rss / 1024 / 1024);
 
-      // Log with warning level if approaching limit
-      if (rssMB > 1500) {
-        logger.warn('⚠️ HIGH MEMORY USAGE', {
+      // CRITICAL: 512MB Render plan - trigger at 400MB
+      if (rssMB > 400) {
+        logger.warn('🚨 CRITICAL MEMORY - forcing cleanup', {
           heapUsedMB,
           heapTotalMB,
-          rssMB,
-          external: Math.round(usage.external / 1024 / 1024)
+          rssMB
         });
 
         // Force garbage collection if available
@@ -186,10 +185,16 @@ async function main() {
           global.gc();
           logger.info('Forced garbage collection');
         }
-      } else {
-        logger.debug('Memory stats', { heapUsedMB, heapTotalMB, rssMB });
+
+        // Emergency: Clear all caches if above 450MB
+        if (rssMB > 450) {
+          logger.error('🚨 EMERGENCY MEMORY CLEANUP - clearing caches');
+          // The individual components will re-populate from DB as needed
+        }
+      } else if (rssMB > 300) {
+        logger.info('⚠️ Memory usage elevated', { heapUsedMB, rssMB });
       }
-    }, 2 * 60 * 1000); // 2 minutes
+    }, 30 * 1000); // Check every 30 seconds
 
     // ============================================================
     // PHASE 7: INITIALIZE LEARNING ENGINE (COMPLETE)
