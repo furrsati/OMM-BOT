@@ -1,4 +1,5 @@
 import winston from 'winston';
+import Transport from 'winston-transport';
 import path from 'path';
 import fs from 'fs';
 
@@ -6,6 +7,134 @@ import fs from 'fs';
 const logsDir = path.join(process.cwd(), 'logs');
 if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
+}
+
+/**
+ * Custom PostgreSQL Transport for Winston
+ * Writes logs to the bot_logs table in the database
+ */
+class PostgresTransport extends Transport {
+  private pool: any = null;
+  private queue: Array<{ level: string; category: string; message: string; data: any }> = [];
+  private isProcessing = false;
+  private initialized = false;
+
+  constructor(opts?: Transport.TransportStreamOptions) {
+    super(opts);
+    // Delay initialization to avoid circular dependency with db module
+    setTimeout(() => this.initialize(), 1000);
+  }
+
+  async initialize() {
+    try {
+      // Dynamic import to avoid circular dependency
+      const { getPool } = await import('../db/postgres');
+      this.pool = getPool();
+      this.initialized = true;
+      // Process any queued logs
+      this.processQueue();
+    } catch (error) {
+      // Database not ready yet, will retry on next log
+      console.error('PostgresTransport: Failed to initialize, will retry');
+    }
+  }
+
+  async processQueue() {
+    if (this.isProcessing || this.queue.length === 0 || !this.initialized) return;
+    this.isProcessing = true;
+
+    while (this.queue.length > 0) {
+      const log = this.queue.shift();
+      if (log) {
+        await this.writeToDb(log);
+      }
+    }
+
+    this.isProcessing = false;
+  }
+
+  async writeToDb(log: { level: string; category: string; message: string; data: any }) {
+    if (!this.pool) return;
+
+    try {
+      await this.pool.query(
+        `INSERT INTO bot_logs (level, category, message, data) VALUES ($1, $2, $3, $4)`,
+        [log.level, log.category, log.message, JSON.stringify(log.data)]
+      );
+    } catch (error: any) {
+      // Silently fail - don't want logging to crash the bot
+      // The log is still in files/console
+    }
+  }
+
+  log(info: any, callback: () => void) {
+    setImmediate(() => {
+      this.emit('logged', info);
+    });
+
+    // Extract category from message or meta
+    let category = 'general';
+    let message = info.message || '';
+
+    // Check for category patterns in message
+    if (message.includes('[TRADE]')) {
+      category = 'trade';
+      message = message.replace('[TRADE] ', '');
+    } else if (message.includes('[DANGER]')) {
+      category = 'danger';
+      message = message.replace('[DANGER] ', '');
+    } else if (message.includes('[LEARNING]')) {
+      category = 'learning';
+      message = message.replace('[LEARNING] ', '');
+    } else if (message.includes('[RPC]')) {
+      category = 'rpc';
+      message = message.replace('[RPC] ', '');
+    } else if (message.includes('[KILL_SWITCH]')) {
+      category = 'kill_switch';
+      message = message.replace('[KILL_SWITCH] ', '');
+    } else if (message.includes('[SCANNER]')) {
+      category = 'scanner';
+      message = message.replace('[SCANNER] ', '');
+    } else if (message.includes('[POSITION]')) {
+      category = 'position';
+      message = message.replace('[POSITION] ', '');
+    } else if (message.includes('[SAFETY]')) {
+      category = 'safety';
+      message = message.replace('[SAFETY] ', '');
+    } else if (message.includes('[WALLET]')) {
+      category = 'wallet';
+      message = message.replace('[WALLET] ', '');
+    } else if (message.includes('[MARKET]')) {
+      category = 'market';
+      message = message.replace('[MARKET] ', '');
+    } else if (message.includes('[EXECUTION]')) {
+      category = 'execution';
+      message = message.replace('[EXECUTION] ', '');
+    }
+
+    // Extract data from info (excluding winston metadata)
+    const { level, message: _, timestamp, ...data } = info;
+
+    const logEntry = {
+      level: info.level,
+      category,
+      message,
+      data: Object.keys(data).length > 0 ? data : {},
+    };
+
+    if (this.initialized && this.pool) {
+      this.writeToDb(logEntry);
+    } else {
+      // Queue the log for later
+      this.queue.push(logEntry);
+      if (this.queue.length > 1000) {
+        // Prevent memory issues, drop oldest logs
+        this.queue.shift();
+      }
+    }
+
+    callback();
+  }
 }
 
 // Define log format
@@ -64,6 +193,10 @@ logger.add(
     format: consoleFormat,
   })
 );
+
+// Add PostgreSQL transport to write logs to database
+// This enables viewing logs in the dashboard
+logger.add(new PostgresTransport({ level: 'info' }));
 
 // Specialized logging functions
 export const logTrade = (action: string, data: any) => {
