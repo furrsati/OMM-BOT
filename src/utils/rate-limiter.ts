@@ -34,6 +34,9 @@ export class RateLimiter {
   private requestCount: number = 0;
   private lastRequestCountReset: number = Date.now();
 
+  // Memory management - prevent unbounded queue growth
+  private readonly MAX_QUEUE_SIZE = 500;
+
   constructor(config: RateLimiterConfig) {
     this.maxTokens = config.maxBurst;
     this.tokens = config.maxBurst;
@@ -47,6 +50,25 @@ export class RateLimiter {
    */
   async execute<T>(fn: () => Promise<T>, priority: number = 0): Promise<T> {
     return new Promise((resolve, reject) => {
+      // Reject if queue is at capacity to prevent memory bloat
+      if (this.queue.length >= this.MAX_QUEUE_SIZE) {
+        // Drop lowest priority requests when at capacity
+        if (priority > 0) {
+          // High priority: evict a low priority request
+          const lowPriorityIdx = this.queue.findIndex(r => r.priority < priority);
+          if (lowPriorityIdx >= 0) {
+            const evicted = this.queue.splice(lowPriorityIdx, 1)[0];
+            evicted.reject(new Error('RPC queue full - evicted for higher priority request'));
+          } else {
+            reject(new Error('RPC queue full - all requests are high priority'));
+            return;
+          }
+        } else {
+          reject(new Error('RPC queue full - request dropped to prevent memory bloat'));
+          return;
+        }
+      }
+
       this.queue.push({ execute: fn, resolve, reject, priority });
 
       // Sort by priority (higher = more important)

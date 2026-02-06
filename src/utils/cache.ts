@@ -10,6 +10,9 @@ class CacheManager {
   private enabled: boolean = true;
   private memoryCache: Map<string, { value: any; expiresAt: number }> = new Map();
 
+  // Memory management - prevent unbounded cache growth
+  private readonly MAX_MEMORY_CACHE_SIZE = 1000;
+
   async initialize(): Promise<void> {
     try {
       // Test PostgreSQL connection
@@ -60,6 +63,20 @@ class CacheManager {
     }
 
     // Fallback to memory cache
+    // Enforce size limit - evict oldest entries if at capacity
+    if (this.memoryCache.size >= this.MAX_MEMORY_CACHE_SIZE) {
+      this.cleanupMemoryCache(); // First try removing expired
+
+      // If still at capacity, remove oldest entries
+      if (this.memoryCache.size >= this.MAX_MEMORY_CACHE_SIZE) {
+        const entriesToRemove = Math.max(1, Math.floor(this.MAX_MEMORY_CACHE_SIZE * 0.1)); // Remove 10%
+        const keys = Array.from(this.memoryCache.keys()).slice(0, entriesToRemove);
+        for (const k of keys) {
+          this.memoryCache.delete(k);
+        }
+      }
+    }
+
     this.memoryCache.set(key, {
       value,
       expiresAt: Date.now() + ttlSeconds * 1000

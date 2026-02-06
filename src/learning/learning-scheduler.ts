@@ -48,6 +48,7 @@ export class LearningScheduler {
   // Cycle tracking
   private lastProcessedTradeCount: number = 0;
   private cyclesRun: Set<string> = new Set();
+  private readonly MAX_CYCLES_TRACKED = 50; // Prevent unbounded growth
 
   constructor() {
     this.patternMatcher = new PatternMatcher();
@@ -91,8 +92,29 @@ export class LearningScheduler {
       this.intervalId = null;
     }
 
+    // Clear memory
+    this.cyclesRun.clear();
+
     this.isActive = false;
     logger.info('⏹️ Learning Scheduler stopped');
+  }
+
+  /**
+   * Prune old cycle keys to prevent memory bloat
+   */
+  private pruneCyclesRun(): void {
+    if (this.cyclesRun.size > this.MAX_CYCLES_TRACKED) {
+      // Convert to array, sort by trade count, keep only recent ones
+      const entries = Array.from(this.cyclesRun);
+      const sorted = entries.sort((a, b) => {
+        const countA = parseInt(a.split('_').pop() || '0');
+        const countB = parseInt(b.split('_').pop() || '0');
+        return countB - countA; // Descending - keep highest
+      });
+
+      this.cyclesRun.clear();
+      sorted.slice(0, this.MAX_CYCLES_TRACKED).forEach(key => this.cyclesRun.add(key));
+    }
   }
 
   /**
@@ -174,6 +196,9 @@ export class LearningScheduler {
           this.cyclesRun.add(cycleKey);
         }
       }
+
+      // Prune old cycle keys to prevent memory bloat
+      this.pruneCyclesRun();
 
     } catch (error: any) {
       logger.error('Error checking learning cycles', {

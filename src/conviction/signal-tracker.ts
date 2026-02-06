@@ -46,7 +46,11 @@ export class SignalTracker {
 
   private trackedOpportunities: Map<string, TrackedOpportunity> = new Map();
   private isRunning: boolean = false;
-  private monitorInterval: NodeJS.Timeout | null = null;
+  private intervals: NodeJS.Timeout[] = []; // Track all intervals for cleanup
+
+  // Memory management constants
+  private readonly MAX_TRACKED_OPPORTUNITIES = 50; // Hard cap to prevent memory bloat
+  private readonly CLEANUP_RETENTION_MS = 1 * 60 * 60 * 1000; // 1 hour (was 24 hours)
 
   // Callback for approved entries (Phase 5 integration)
   private onEntryApprovedCallback?: (decision: EntryDecision, signal: AggregatedSignal) => void;
@@ -99,33 +103,36 @@ export class SignalTracker {
       logger.error('Error cleaning up dead tokens', { error: error.message });
     });
 
+    // Clear any existing intervals first
+    this.clearAllIntervals();
+
     // Monitor for new opportunities every 30 seconds
-    this.monitorInterval = setInterval(() => {
+    this.intervals.push(setInterval(() => {
       this.scanForOpportunities().catch(error => {
         logger.error('Error scanning for opportunities', { error: error.message });
       });
-    }, 30000);
+    }, 30000));
 
     // Also monitor tracked opportunities every 10 seconds
-    setInterval(() => {
+    this.intervals.push(setInterval(() => {
       this.updateTrackedOpportunities().catch(error => {
         logger.error('Error updating tracked opportunities', { error: error.message });
       });
-    }, 10000);
+    }, 10000));
 
     // Re-analyze tokens with 0 scores every 2 minutes
-    setInterval(() => {
+    this.intervals.push(setInterval(() => {
       this.reanalyzeZeroScoreTokens().catch(error => {
         logger.error('Error re-analyzing zero score tokens', { error: error.message });
       });
-    }, 120000);
+    }, 120000));
 
     // Clean up dead tokens every 2 minutes
-    setInterval(() => {
+    this.intervals.push(setInterval(() => {
       this.cleanupDeadTokens().catch(error => {
         logger.error('Error cleaning up dead tokens', { error: error.message });
       });
-    }, 2 * 60 * 1000);
+    }, 2 * 60 * 1000));
 
     // Also run initial re-analysis
     this.reanalyzeZeroScoreTokens().catch(error => {
@@ -142,12 +149,20 @@ export class SignalTracker {
     logger.info('Stopping Signal Tracker...');
     this.isRunning = false;
 
-    if (this.monitorInterval) {
-      clearInterval(this.monitorInterval);
-      this.monitorInterval = null;
-    }
+    this.clearAllIntervals();
+    this.trackedOpportunities.clear(); // Free memory on stop
 
     logger.info('✅ Signal Tracker stopped');
+  }
+
+  /**
+   * Clear all intervals to prevent memory leaks
+   */
+  private clearAllIntervals(): void {
+    for (const interval of this.intervals) {
+      clearInterval(interval);
+    }
+    this.intervals = [];
   }
 
   /**
@@ -570,7 +585,7 @@ export class SignalTracker {
         if (priceData.liquidityUSD !== undefined && priceData.liquidityUSD < 5000) {
           logger.info(`💀 ${tokenAddress.slice(0, 8)}... liquidity dropped to $${priceData.liquidityUSD.toFixed(0)} - removing`);
           opportunity.status = 'EXPIRED';
-          await this.updateOpportunityStatus(tokenAddress, 'DEAD');
+          await this.updateOpportunityStatus(tokenAddress, 'REJECTED', `Liquidity dropped to $${priceData.liquidityUSD.toFixed(0)}`);
           this.trackedOpportunities.delete(tokenAddress);
           continue;
         }
@@ -581,7 +596,7 @@ export class SignalTracker {
           if (priceRatio < 0.2) {
             logger.info(`💀 ${tokenAddress.slice(0, 8)}... price collapsed ${((1 - priceRatio) * 100).toFixed(0)}% - removing`);
             opportunity.status = 'EXPIRED';
-            await this.updateOpportunityStatus(tokenAddress, 'DEAD');
+            await this.updateOpportunityStatus(tokenAddress, 'REJECTED', `Price collapsed ${((1 - priceRatio) * 100).toFixed(0)}%`);
             this.trackedOpportunities.delete(tokenAddress);
             continue;
           }
@@ -591,7 +606,7 @@ export class SignalTracker {
         if (opportunity.smartWalletsEntered.length === 0 && tokenAgeMinutes > 30) {
           logger.info(`💀 ${tokenAddress.slice(0, 8)}... no smart wallet interest after 30 min - removing`);
           opportunity.status = 'EXPIRED';
-          await this.updateOpportunityStatus(tokenAddress, 'DEAD');
+          await this.updateOpportunityStatus(tokenAddress, 'REJECTED', 'No smart wallet interest after 30 min');
           this.trackedOpportunities.delete(tokenAddress);
           continue;
         }
@@ -647,16 +662,17 @@ export class SignalTracker {
   /**
    * Update opportunity status in database
    */
-  private async updateOpportunityStatus(tokenAddress: string, status: string): Promise<void> {
+  private async updateOpportunityStatus(tokenAddress: string, status: string, rejectionReason?: string): Promise<void> {
     try {
       await query(`
         UPDATE token_opportunities SET
           status = $2,
+          rejection_reason = COALESCE($3, rejection_reason),
           last_updated = NOW()
         WHERE token_address = $1
-      `, [tokenAddress, status]);
+      `, [tokenAddress, status, rejectionReason || null]);
     } catch (error: any) {
-      logger.debug(`Error updating opportunity status: ${error.message}`);
+      logger.error('Database query error', { error: error.message, query: 'updateOpportunityStatus', params: JSON.stringify([tokenAddress, status, rejectionReason]) });
     }
   }
 
@@ -879,17 +895,39 @@ export class SignalTracker {
   }
 
   /**
-   * Clean up expired opportunities
+   * Clean up expired opportunities and enforce size cap
    */
   private cleanupExpiredOpportunities(): void {
     const now = Date.now();
-    const expiredCutoff = now - 24 * 60 * 60 * 1000; // Keep for 24 hours for logging
+    const expiredCutoff = now - this.CLEANUP_RETENTION_MS; // 1 hour retention
 
+    // Remove expired entries
     for (const [tokenAddress, opportunity] of this.trackedOpportunities.entries()) {
       if (opportunity.status === 'EXPIRED' && opportunity.expiresAt < expiredCutoff) {
         this.trackedOpportunities.delete(tokenAddress);
         logger.debug(`Cleaned up expired opportunity: ${tokenAddress.slice(0, 8)}...`);
       }
+    }
+
+    // Enforce hard size cap - remove oldest EXPIRED/ENTERED first, then oldest WATCHING
+    if (this.trackedOpportunities.size > this.MAX_TRACKED_OPPORTUNITIES) {
+      const excess = this.trackedOpportunities.size - this.MAX_TRACKED_OPPORTUNITIES;
+      const entries = Array.from(this.trackedOpportunities.entries())
+        .sort((a, b) => {
+          // Priority: WATCHING > READY > ENTERED > EXPIRED
+          const statusOrder = { WATCHING: 0, READY: 1, ENTERED: 2, EXPIRED: 3 };
+          const statusDiff = statusOrder[b[1].status] - statusOrder[a[1].status];
+          if (statusDiff !== 0) return statusDiff;
+          // Then by age (oldest first for removal)
+          return a[1].firstDetected - b[1].firstDetected;
+        });
+
+      for (let i = 0; i < excess && i < entries.length; i++) {
+        this.trackedOpportunities.delete(entries[i][0]);
+        logger.debug(`Size cap: removed ${entries[i][0].slice(0, 8)}... (${entries[i][1].status})`);
+      }
+
+      logger.info(`🧹 Memory cap enforced: removed ${excess} oldest entries, now tracking ${this.trackedOpportunities.size}`);
     }
   }
 
@@ -1103,10 +1141,10 @@ export class SignalTracker {
         WHERE discovered_at < NOW() - INTERVAL '7 days'
       `);
 
-      // 12. DELETE DEAD/EXPIRED tokens older than 24 hours (keep DB clean)
+      // 12. DELETE EXPIRED/REJECTED tokens older than 24 hours (keep DB clean)
       const deletedDeadExpired = await query(`
         DELETE FROM token_opportunities
-        WHERE status IN ('DEAD', 'EXPIRED')
+        WHERE status IN ('EXPIRED', 'REJECTED')
         AND discovered_at < NOW() - INTERVAL '24 hours'
       `);
 
