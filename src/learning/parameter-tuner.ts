@@ -40,7 +40,7 @@ interface BucketStats {
 // Default parameters from CLAUDE.MD
 const DEFAULT_PARAMETERS = {
   dipEntryRange: { min: 20, max: 30 },
-  smartWalletCountThreshold: 3,
+  smartWalletCountThreshold: 2, // LOWERED from 3 for limited wallet pool
   tokenAgeMin: 10, // minutes
   tokenAgeMax: 240, // minutes
   stopLossPercent: 25,

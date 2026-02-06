@@ -294,7 +294,8 @@ export class SignalAggregator {
         walletTiers = walletAddresses.map(addr => {
           const wallet = walletMap.get(addr);
           if (wallet) {
-            totalScore += wallet.score || 0;
+            // Use Number() to safely convert DB values that might be null/string
+            totalScore += Number(wallet.score) || 0;
             return wallet.tier || 3;
           }
           return 3; // Default to Tier 3 if not found
@@ -303,6 +304,10 @@ export class SignalAggregator {
         avgScore = walletDetails.rows.length > 0
           ? totalScore / walletDetails.rows.length
           : 0;
+        // Guard against NaN from null/undefined scores
+        if (Number.isNaN(avgScore) || !Number.isFinite(avgScore)) {
+          avgScore = 0;
+        }
       } else if (walletAddresses.length > 0) {
         // Calculate average score from known wallets
         const walletDetails = await query<{ score: number }>(`
@@ -310,8 +315,12 @@ export class SignalAggregator {
         `, [walletAddresses]);
 
         avgScore = walletDetails.rows.length > 0
-          ? walletDetails.rows.reduce((sum, w) => sum + (w.score || 0), 0) / walletDetails.rows.length
+          ? walletDetails.rows.reduce((sum, w) => sum + (Number(w.score) || 0), 0) / walletDetails.rows.length
           : 0;
+        // Guard against NaN from null/undefined scores
+        if (Number.isNaN(avgScore) || !Number.isFinite(avgScore)) {
+          avgScore = 0;
+        }
       }
 
       // Count wallets by tier
@@ -319,14 +328,15 @@ export class SignalAggregator {
       const tier2Count = walletTiers.filter(t => t === 2).length;
       const tier3Count = walletTiers.filter(t => t === 3).length;
 
-      // Determine confidence based on CLAUDE.md rules:
-      // - 3+ Tier 1 or Tier 2 = HIGH
-      // - 1-2 Tier 1 or 2+ Tier 2 = MEDIUM
+      // Determine confidence based on wallet tiers
+      // LOWERED: Reduced thresholds to work with limited wallet pool
+      // - 2+ Tier 1 or (1 T1 + 1 T2) or 2+ Tier 2 = HIGH
+      // - 1 Tier 1 or 1 Tier 2 = MEDIUM
       // - Tier 3 only = LOW
       let confidence: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
-      if (tier1Count >= 3 || (tier1Count >= 2 && tier2Count >= 1) || tier2Count >= 3) {
+      if (tier1Count >= 2 || (tier1Count >= 1 && tier2Count >= 1) || tier2Count >= 2) {
         confidence = 'HIGH';
-      } else if (tier1Count >= 1 || tier2Count >= 2) {
+      } else if (tier1Count >= 1 || tier2Count >= 1) {
         confidence = 'MEDIUM';
       }
 
@@ -346,7 +356,7 @@ export class SignalAggregator {
         tier1: tier1Count,
         tier2: tier2Count,
         tier3: tier3Count,
-        avgScore: avgScore.toFixed(1),
+        avgScore: Number.isFinite(avgScore) ? avgScore.toFixed(1) : '0.0',
         confidence
       });
 

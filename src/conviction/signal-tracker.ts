@@ -603,17 +603,19 @@ export class SignalTracker {
         const tier2Count = opportunity.smartWalletTiers.filter(t => t === 2).length;
 
         // ENTRY TRIGGER 1: Early Discovery (per CLAUDE.md Category 5)
-        // If 2+ Tier 1 wallets buy within first 10 minutes AND safety passes → Enter without dip
-        if (opportunity.status === 'WATCHING' && tokenAgeMinutes <= 10 && tier1Count >= 2) {
+        // If 1+ Tier 1 wallets buy within first 10 minutes AND safety passes → Enter without dip
+        // LOWERED: Was 2+ Tier 1, now 1+ to allow trading with limited wallet pool
+        if (opportunity.status === 'WATCHING' && tokenAgeMinutes <= 10 && tier1Count >= 1) {
           logger.info(`🚀 EARLY DISCOVERY: ${tokenAddress.slice(0, 8)}... (${tier1Count} Tier 1 wallets, ${tokenAgeMinutes.toFixed(1)} min old)`);
           opportunity.status = 'READY';
           await this.evaluateEntry(opportunity, true); // true = isEarlyDiscovery
           continue;
         }
 
-        // ENTRY TRIGGER 2: Primary Entry (3+ Tier 1/2 wallets + 20-30% dip)
+        // ENTRY TRIGGER 2: Primary Entry (2+ Tier 1/2 wallets + 20-35% dip)
+        // LOWERED: Was 3+ wallets, now 2+ to allow trading with limited wallet pool
         if (opportunity.status === 'WATCHING' && dipDepth >= 20 && dipDepth <= 35) {
-          if (tier1Count >= 3 || (tier1Count + tier2Count) >= 3) {
+          if (tier1Count >= 2 || (tier1Count + tier2Count) >= 2) {
             logger.info(`🎯 PRIMARY ENTRY: ${tokenAddress.slice(0, 8)}... (${dipDepth.toFixed(1)}% dip, ${tier1Count}T1/${tier2Count}T2)`);
             opportunity.status = 'READY';
             await this.evaluateEntry(opportunity);

@@ -29,8 +29,8 @@ const DEFAULT_SETTINGS = {
     highConvictionThreshold: 85,    // 85-100 = HIGH CONVICTION
     mediumConvictionThreshold: 70,  // 70-84 = MEDIUM CONVICTION
     lowConvictionThreshold: 50,     // 50-69 = LOW CONVICTION, below 50 = REJECT
-    minSmartWalletCountTier1: 3,    // 3+ Tier 1/2 wallets for primary trigger
-    minSmartWalletCountEarly: 2,    // 2+ Tier 1 for early discovery
+    minSmartWalletCountTier1: 2,    // 2+ Tier 1/2 wallets for primary trigger (LOWERED from 3)
+    minSmartWalletCountEarly: 1,    // 1+ Tier 1 for early discovery (LOWERED from 2)
     minLiquidityDepth: 30000,       // Min $30K liquidity (below is risky)
     preferredLiquidityDepth: 50000, // $50K+ for +10 points
     minDipEntry: 20,                // Enter on 20-30% dip from local high
