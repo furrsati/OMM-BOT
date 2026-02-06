@@ -17,6 +17,7 @@ import { PriceFeed } from '../market';
 import { SignalAggregator, AggregatedSignal } from './signal-aggregator';
 import { ConvictionScorer } from './conviction-scorer';
 import { EntryDecisionEngine, EntryDecision } from './entry-decision';
+import { SafetyScorer } from '../safety';
 import { query } from '../db/postgres';
 import { rateLimitedRPC } from '../utils/rate-limiter';
 
@@ -41,6 +42,7 @@ export class SignalTracker {
   private signalAggregator: SignalAggregator;
   private convictionScorer: ConvictionScorer;
   private entryDecision: EntryDecisionEngine;
+  private safetyScorer: SafetyScorer;
 
   private trackedOpportunities: Map<string, TrackedOpportunity> = new Map();
   private isRunning: boolean = false;
@@ -55,7 +57,8 @@ export class SignalTracker {
     priceFeed: PriceFeed,
     signalAggregator: SignalAggregator,
     convictionScorer: ConvictionScorer,
-    entryDecision: EntryDecisionEngine
+    entryDecision: EntryDecisionEngine,
+    safetyScorer: SafetyScorer
   ) {
     this.connection = connection;
     this.walletManager = walletManager;
@@ -63,6 +66,7 @@ export class SignalTracker {
     this.signalAggregator = signalAggregator;
     this.convictionScorer = convictionScorer;
     this.entryDecision = entryDecision;
+    this.safetyScorer = safetyScorer;
   }
 
   /**
@@ -98,6 +102,18 @@ export class SignalTracker {
         logger.error('Error updating tracked opportunities', { error: error.message });
       });
     }, 10000);
+
+    // Re-analyze tokens with 0 scores every 2 minutes
+    setInterval(() => {
+      this.reanalyzeZeroScoreTokens().catch(error => {
+        logger.error('Error re-analyzing zero score tokens', { error: error.message });
+      });
+    }, 120000);
+
+    // Also run initial re-analysis
+    this.reanalyzeZeroScoreTokens().catch(error => {
+      logger.debug('Initial re-analysis failed', { error: error.message });
+    });
 
     logger.info('✅ Signal Tracker started');
   }
@@ -354,14 +370,65 @@ export class SignalTracker {
       // Get current price data
       const priceData = await this.priceFeed.getPrice(tokenAddress);
 
+      // Run safety analysis and calculate conviction score
+      let safetyScore = 0;
+      let convictionScore = 0;
+      let safetyChecks = {};
+      let isHoneypot = false;
+      let hasMintAuthority = false;
+      let hasFreezeAuthority = false;
+
+      try {
+        // Try direct safety analysis first (faster, more reliable)
+        const safetyResult = await this.safetyScorer.analyze(tokenAddress);
+        if (safetyResult) {
+          safetyScore = safetyResult.overallScore || 0;
+          isHoneypot = safetyResult.honeypotAnalysis?.isHoneypot || false;
+          hasMintAuthority = safetyResult.contractAnalysis?.hasMintAuthority || false;
+          hasFreezeAuthority = safetyResult.contractAnalysis?.hasFreezeAuthority || false;
+          safetyChecks = safetyResult;
+        }
+
+        // Try to get full signal aggregation for conviction score
+        try {
+          const aggregatedSignal = await this.signalAggregator.aggregateSignals(
+            tokenAddress,
+            tokenInfo.name,
+            tokenInfo.symbol
+          );
+          const conviction = await this.convictionScorer.calculateConviction(aggregatedSignal);
+          convictionScore = conviction.totalScore || 0;
+        } catch (aggError: any) {
+          // Use safety score as base conviction if aggregation fails
+          convictionScore = safetyScore * 0.25; // Safety is 25% of conviction
+          logger.debug(`Signal aggregation failed, using safety-based conviction: ${convictionScore}`);
+        }
+
+        logger.info(`Safety analysis for ${tokenAddress.slice(0, 8)}: score=${safetyScore}, conviction=${convictionScore}, honeypot=${isHoneypot}`);
+      } catch (error: any) {
+        logger.warn(`Safety analysis failed for ${tokenAddress.slice(0, 8)}: ${error.message}`);
+      }
+
+      // Determine status based on safety
+      let status = 'ANALYZING';
+      let rejectionReason = null;
+      if (isHoneypot) {
+        status = 'REJECTED';
+        rejectionReason = 'HONEYPOT DETECTED';
+      } else if (hasMintAuthority) {
+        status = 'REJECTED';
+        rejectionReason = 'Mint authority active';
+      }
+
       await query(`
         INSERT INTO token_opportunities (
           token_address, token_name, token_symbol, discovered_via,
           smart_wallets_entered, smart_wallet_count,
           tier1_count, tier2_count, tier3_count,
           current_price, liquidity_usd, holder_count,
-          status, conviction_score
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          safety_score, safety_checks, is_honeypot, has_mint_authority, has_freeze_authority,
+          conviction_score, status, rejection_reason
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         ON CONFLICT (token_address) DO UPDATE SET
           smart_wallets_entered = EXCLUDED.smart_wallets_entered,
           smart_wallet_count = EXCLUDED.smart_wallet_count,
@@ -369,6 +436,14 @@ export class SignalTracker {
           tier2_count = EXCLUDED.tier2_count,
           tier3_count = EXCLUDED.tier3_count,
           current_price = COALESCE(EXCLUDED.current_price, token_opportunities.current_price),
+          safety_score = EXCLUDED.safety_score,
+          safety_checks = EXCLUDED.safety_checks,
+          is_honeypot = EXCLUDED.is_honeypot,
+          has_mint_authority = EXCLUDED.has_mint_authority,
+          has_freeze_authority = EXCLUDED.has_freeze_authority,
+          conviction_score = EXCLUDED.conviction_score,
+          status = CASE WHEN token_opportunities.status = 'ANALYZING' THEN EXCLUDED.status ELSE token_opportunities.status END,
+          rejection_reason = CASE WHEN token_opportunities.status = 'ANALYZING' THEN EXCLUDED.rejection_reason ELSE token_opportunities.rejection_reason END,
           last_updated = NOW()
       `, [
         tokenAddress,
@@ -383,8 +458,14 @@ export class SignalTracker {
         priceData?.priceUSD || null,
         priceData?.liquidityUSD || null,
         null,
-        'ANALYZING',
-        0 // Will be calculated when conviction scoring runs
+        safetyScore,
+        JSON.stringify(safetyChecks),
+        isHoneypot,
+        hasMintAuthority,
+        hasFreezeAuthority,
+        convictionScore,
+        status,
+        rejectionReason
       ]);
 
     } catch (error: any) {
@@ -672,6 +753,109 @@ export class SignalTracker {
         this.trackedOpportunities.delete(tokenAddress);
         logger.debug(`Cleaned up expired opportunity: ${tokenAddress.slice(0, 8)}...`);
       }
+    }
+  }
+
+  /**
+   * Re-analyze tokens with 0 safety scores
+   * This catches tokens that were inserted before safety analysis was added
+   */
+  private async reanalyzeZeroScoreTokens(): Promise<void> {
+    try {
+      // Find tokens with 0 safety scores that are still analyzing
+      const result = await query<{ token_address: string; token_name: string; token_symbol: string }>(
+        `SELECT token_address, token_name, token_symbol
+         FROM token_opportunities
+         WHERE safety_score = 0
+         AND status = 'ANALYZING'
+         AND expires_at > NOW()
+         ORDER BY discovered_at DESC
+         LIMIT 10`
+      );
+
+      if (result.rows.length === 0) {
+        return;
+      }
+
+      logger.info(`🔄 Re-analyzing ${result.rows.length} tokens with 0 safety scores...`);
+
+      for (const token of result.rows) {
+        try {
+          // Run safety analysis
+          const aggregatedSignal = await this.signalAggregator.aggregateSignals(
+            token.token_address,
+            token.token_name || 'Unknown',
+            token.token_symbol || '???'
+          );
+
+          let safetyScore = 0;
+          let isHoneypot = false;
+          let hasMintAuthority = false;
+          let hasFreezeAuthority = false;
+          let safetyChecks = {};
+
+          if (aggregatedSignal.safety) {
+            safetyScore = aggregatedSignal.safety.overallScore || 0;
+            isHoneypot = aggregatedSignal.safety.honeypotAnalysis?.isHoneypot || false;
+            hasMintAuthority = aggregatedSignal.safety.contractAnalysis?.hasMintAuthority || false;
+            hasFreezeAuthority = aggregatedSignal.safety.contractAnalysis?.hasFreezeAuthority || false;
+            safetyChecks = aggregatedSignal.safety;
+          }
+
+          // Calculate conviction score
+          const conviction = await this.convictionScorer.calculateConviction(aggregatedSignal);
+          const convictionScore = conviction.totalScore || 0;
+
+          // Determine status based on safety
+          let status = 'ANALYZING';
+          let rejectionReason = null;
+          if (isHoneypot) {
+            status = 'REJECTED';
+            rejectionReason = 'HONEYPOT DETECTED';
+          } else if (hasMintAuthority) {
+            status = 'REJECTED';
+            rejectionReason = 'Mint authority active';
+          }
+
+          // Update the token
+          await query(`
+            UPDATE token_opportunities SET
+              safety_score = $2,
+              safety_checks = $3,
+              is_honeypot = $4,
+              has_mint_authority = $5,
+              has_freeze_authority = $6,
+              conviction_score = $7,
+              status = CASE WHEN status = 'ANALYZING' THEN $8 ELSE status END,
+              rejection_reason = CASE WHEN status = 'ANALYZING' THEN $9 ELSE rejection_reason END,
+              last_updated = NOW()
+            WHERE token_address = $1
+          `, [
+            token.token_address,
+            safetyScore,
+            JSON.stringify(safetyChecks),
+            isHoneypot,
+            hasMintAuthority,
+            hasFreezeAuthority,
+            convictionScore,
+            status,
+            rejectionReason
+          ]);
+
+          logger.debug(`Updated ${token.token_symbol}: safety=${safetyScore}, conviction=${convictionScore}`);
+
+          // Small delay to avoid overwhelming APIs
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+        } catch (error: any) {
+          logger.debug(`Failed to re-analyze ${token.token_address.slice(0, 8)}: ${error.message}`);
+        }
+      }
+
+      logger.info(`✅ Completed re-analysis of tokens`);
+
+    } catch (error: any) {
+      logger.debug(`Error in reanalyzeZeroScoreTokens: ${error.message}`);
     }
   }
 }

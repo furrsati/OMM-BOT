@@ -32,13 +32,18 @@ interface TokenOpportunity {
   tokenAddress: string
   tokenName: string
   tokenSymbol: string
-  safetyScore: number
-  convictionScore: number
-  smartWalletCount: number
+  safety: {
+    score: number
+  }
+  conviction: {
+    score: number
+  }
+  smartWallets: {
+    total: number
+  }
   status: 'ANALYZING' | 'QUALIFIED' | 'REJECTED' | 'ENTERED' | 'EXPIRED'
-  rejectReason?: string
-  createdAt: string
-  updatedAt: string
+  rejectionReason?: string
+  lastUpdated: string
 }
 
 interface ScannerResponse {
@@ -273,31 +278,31 @@ export default function ScannerPage() {
                       <TableCell className="text-right">
                         <Badge
                           variant={
-                            opportunity.safetyScore >= 80
+                            opportunity.safety?.score || 0 >= 80
                               ? 'success'
-                              : opportunity.safetyScore >= 60
+                              : opportunity.safety?.score || 0 >= 60
                               ? 'warning'
                               : 'destructive'
                           }
                         >
-                          {formatNumber(opportunity.safetyScore, 0)}
+                          {formatNumber(opportunity.safety?.score || 0, 0)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
                         <Badge
                           variant={
-                            opportunity.convictionScore >= 85
+                            opportunity.conviction?.score || 0 >= 85
                               ? 'success'
-                              : opportunity.convictionScore >= 70
+                              : opportunity.conviction?.score || 0 >= 70
                               ? 'warning'
                               : 'outline'
                           }
                         >
-                          {formatNumber(opportunity.convictionScore, 0)}
+                          {formatNumber(opportunity.conviction?.score || 0, 0)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {opportunity.smartWalletCount}
+                        {opportunity.smartWallets?.total || 0}
                       </TableCell>
                       <TableCell>
                         <Badge variant={config.variant}>
@@ -308,14 +313,14 @@ export default function ScannerPage() {
                           />
                           {config.label}
                         </Badge>
-                        {opportunity.rejectReason && (
+                        {opportunity.rejectionReason && (
                           <p className="text-xs text-muted-foreground mt-1">
-                            {opportunity.rejectReason}
+                            {opportunity.rejectionReason}
                           </p>
                         )}
                       </TableCell>
                       <TableCell className="text-right text-muted-foreground text-sm">
-                        {timeAgo(opportunity.updatedAt)}
+                        {timeAgo(opportunity.lastUpdated)}
                       </TableCell>
                     </TableRow>
                   )
@@ -339,7 +344,7 @@ export default function ScannerPage() {
               {entered.map((token) => (
                 <Badge key={token.id} variant="success">
                   {token.tokenSymbol || formatAddress(token.tokenAddress)} (
-                  {formatNumber(token.convictionScore, 0)})
+                  {formatNumber(token.conviction?.score || 0, 0)})
                 </Badge>
               ))}
             </div>

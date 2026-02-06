@@ -357,7 +357,8 @@ async function main() {
       priceFeed,
       signalAggregator,
       convictionScorer,
-      entryDecision
+      entryDecision,
+      safetyScorer
     );
 
     // Start signal tracking if trading is enabled

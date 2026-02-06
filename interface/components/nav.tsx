@@ -8,7 +8,6 @@ import {
   TrendingUp,
   Target,
   Scan,
-  Settings,
   Bot,
   Activity
 } from 'lucide-react'
@@ -21,7 +20,6 @@ const navItems = [
   { href: '/wallets', label: 'Wallets', icon: Wallet },
   { href: '/scanner', label: 'Scanner', icon: Scan },
   { href: '/logs', label: 'Logs', icon: Activity },
-  { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
 export function Nav() {

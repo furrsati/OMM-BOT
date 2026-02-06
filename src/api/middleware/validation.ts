@@ -95,58 +95,124 @@ export const schemas = {
     regime: z.enum(['FULL', 'CAUTIOUS', 'DEFENSIVE', 'PAUSE']),
   }),
 
-  // Settings update - uses partial with strict bounds
+  // Settings update - category-based structure matching claude.md V3.0
   settingsUpdate: z.object({
-    // Position Sizing
-    maxPositionSize: z.number().min(0.1).max(10).optional(),
-    minPositionSize: z.number().min(0.1).max(5).optional(),
-    maxOpenPositions: z.number().int().min(1).max(20).optional(),
-    maxTotalExposure: z.number().min(1).max(100).optional(),
-    maxSingleTradeRisk: z.number().min(0.1).max(5).optional(),
+    // Category 6: Position Sizing
+    position_sizing: z.object({
+      highConvictionSize: z.number().min(1).max(10).optional(),
+      mediumConvictionSize: z.number().min(0.5).max(5).optional(),
+      lowConvictionSize: z.number().min(0.1).max(3).optional(),
+      maxOpenPositions: z.number().int().min(1).max(10).optional(),
+      maxTotalExposure: z.number().min(5).max(50).optional(),
+      maxSingleTradeRisk: z.number().min(0.5).max(5).optional(),
+    }).partial().optional(),
 
-    // Entry Rules
-    minConvictionScore: z.number().int().min(0).max(100).optional(),
-    minSmartWalletCount: z.number().int().min(1).max(10).optional(),
-    maxTokenAge: z.number().min(0.1).max(168).optional(),
-    minLiquidityDepth: z.number().min(1000).max(10000000).optional(),
-    maxDipEntry: z.number().min(1).max(90).optional(),
-    minDipEntry: z.number().min(1).max(90).optional(),
+    // Category 5: Entry Rules
+    entry_rules: z.object({
+      highConvictionThreshold: z.number().int().min(70).max(100).optional(),
+      mediumConvictionThreshold: z.number().int().min(50).max(90).optional(),
+      lowConvictionThreshold: z.number().int().min(30).max(70).optional(),
+      minSmartWalletCountTier1: z.number().int().min(1).max(10).optional(),
+      minSmartWalletCountEarly: z.number().int().min(1).max(5).optional(),
+      minLiquidityDepth: z.number().min(1000).max(1000000).optional(),
+      preferredLiquidityDepth: z.number().min(10000).max(5000000).optional(),
+      minDipEntry: z.number().min(5).max(50).optional(),
+      maxDipEntry: z.number().min(10).max(60).optional(),
+      maxTokenAgeMinutes: z.number().min(1).max(60).optional(),
+      tokenAgeBonus: z.number().min(10).max(240).optional(),
+    }).partial().optional(),
 
-    // Exit Rules
-    defaultStopLoss: z.number().min(5).max(50).optional(),
-    earlyDiscoveryStopLoss: z.number().min(5).max(50).optional(),
-    trailingStopActivation: z.number().min(5).max(100).optional(),
-    trailingStopDistance: z.number().min(1).max(50).optional(),
-    timeBasedStopHours: z.number().min(0.5).max(24).optional(),
+    // Category 9: Exit Rules
+    exit_rules: z.object({
+      defaultStopLoss: z.number().min(12).max(35).optional(),
+      earlyDiscoveryStopLoss: z.number().min(5).max(25).optional(),
+      trailingStopActivation: z.number().min(10).max(50).optional(),
+      trailingStop20to50: z.number().min(5).max(25).optional(),
+      trailingStop50to100: z.number().min(5).max(20).optional(),
+      trailingStop100plus: z.number().min(3).max(15).optional(),
+      timeBasedStopHours: z.number().min(2).max(8).optional(),
+      timeBasedStopMinPnL: z.number().min(-20).max(0).optional(),
+      timeBasedStopMaxPnL: z.number().min(0).max(30).optional(),
+    }).partial().optional(),
 
-    // Take Profit
-    takeProfitLevel1: z.number().min(1).max(500).optional(),
-    takeProfitLevel1Percent: z.number().min(1).max(100).optional(),
-    takeProfitLevel2: z.number().min(1).max(500).optional(),
-    takeProfitLevel2Percent: z.number().min(1).max(100).optional(),
-    takeProfitLevel3: z.number().min(1).max(1000).optional(),
-    takeProfitLevel3Percent: z.number().min(1).max(100).optional(),
-    moonbagPercent: z.number().min(0).max(50).optional(),
+    // Category 10: Take Profit (Standard)
+    take_profit: z.object({
+      level1: z.number().min(10).max(100).optional(),
+      level1Percent: z.number().min(5).max(50).optional(),
+      level2: z.number().min(20).max(150).optional(),
+      level2Percent: z.number().min(5).max(50).optional(),
+      level3: z.number().min(50).max(300).optional(),
+      level3Percent: z.number().min(5).max(50).optional(),
+      level4: z.number().min(100).max(500).optional(),
+      level4Percent: z.number().min(5).max(50).optional(),
+      moonbagPercent: z.number().min(5).max(50).optional(),
+    }).partial().optional(),
 
-    // Daily Limits
-    maxDailyLoss: z.number().min(1).max(50).optional(),
-    maxDailyProfit: z.number().min(1).max(100).optional(),
-    losingStreakPause: z.number().int().min(1).max(20).optional(),
-    weeklyCircuitBreaker: z.number().min(1).max(100).optional(),
+    // Category 10: Take Profit (Early Discovery)
+    take_profit_early: z.object({
+      level1: z.number().min(20).max(150).optional(),
+      level1Percent: z.number().min(5).max(50).optional(),
+      level2: z.number().min(50).max(300).optional(),
+      level2Percent: z.number().min(5).max(50).optional(),
+      level3: z.number().min(100).max(500).optional(),
+      level3Percent: z.number().min(5).max(50).optional(),
+      moonbagPercent: z.number().min(5).max(50).optional(),
+    }).partial().optional(),
 
-    // Execution
-    maxSlippageBuy: z.number().min(0.1).max(20).optional(),
-    maxSlippageSell: z.number().min(0.1).max(30).optional(),
-    maxSlippageEmergency: z.number().min(0.1).max(50).optional(),
-    maxRetries: z.number().int().min(0).max(10).optional(),
-    targetLatencyMs: z.number().int().min(100).max(5000).optional(),
+    // Category 11: Daily Limits
+    daily_limits: z.object({
+      maxDailyLoss: z.number().min(1).max(20).optional(),
+      maxDailyProfit: z.number().min(5).max(50).optional(),
+      losingStreakPause: z.number().int().min(2).max(10).optional(),
+      losingStreakPauseHours: z.number().min(1).max(24).optional(),
+      weeklyCircuitBreaker: z.number().min(5).max(30).optional(),
+      weeklyCircuitBreakerHours: z.number().min(12).max(168).optional(),
+      losingStreak2Reduction: z.number().min(10).max(50).optional(),
+      losingStreak3Reduction: z.number().min(25).max(75).optional(),
+    }).partial().optional(),
+
+    // Category 7: Execution
+    execution: z.object({
+      maxSlippageBuy: z.number().min(1).max(10).optional(),
+      maxSlippageSell: z.number().min(1).max(15).optional(),
+      maxSlippageEmergency: z.number().min(5).max(25).optional(),
+      maxRetries: z.number().int().min(1).max(5).optional(),
+      retryPriorityFeeMultiplier: z.number().min(1).max(3).optional(),
+      targetLatencyMs: z.number().int().min(100).max(2000).optional(),
+    }).partial().optional(),
+
+    // Category 3: Market Conditions
+    market_conditions: z.object({
+      solCautionThreshold: z.number().min(1).max(10).optional(),
+      solDefensiveThreshold: z.number().min(3).max(15).optional(),
+      solPauseThreshold: z.number().min(10).max(25).optional(),
+      btcCautionThreshold: z.number().min(2).max(10).optional(),
+      btcDefensiveThreshold: z.number().min(5).max(20).optional(),
+      offPeakConvictionBoost: z.number().min(0).max(20).optional(),
+      peakHoursStart: z.number().int().min(0).max(23).optional(),
+      peakHoursEnd: z.number().int().min(0).max(23).optional(),
+    }).partial().optional(),
+
+    // Learning Engine Weights
+    learning_weights: z.object({
+      smartWallet: z.number().min(5).max(40).optional(),
+      tokenSafety: z.number().min(5).max(40).optional(),
+      marketConditions: z.number().min(5).max(40).optional(),
+      socialSignals: z.number().min(5).max(40).optional(),
+      entryQuality: z.number().min(5).max(40).optional(),
+      minWeight: z.number().min(1).max(10).optional(),
+      maxWeight: z.number().min(30).max(50).optional(),
+      maxAdjustmentPerCycle: z.number().min(1).max(10).optional(),
+    }).partial().optional(),
 
     // Notifications
-    telegramEnabled: z.boolean().optional(),
-    telegramChatId: z.string().max(50).optional(),
-    discordEnabled: z.boolean().optional(),
-    discordWebhook: z.string().url().optional().or(z.literal('')),
-  }).strict(),
+    notifications: z.object({
+      telegramEnabled: z.boolean().optional(),
+      telegramChatId: z.string().max(50).optional(),
+      discordEnabled: z.boolean().optional(),
+      discordWebhook: z.string().url().optional().or(z.literal('')),
+    }).partial().optional(),
+  }).partial(),
 
   // ID parameter (UUID or integer)
   idParam: z.object({
