@@ -252,6 +252,16 @@ export class ContractAnalyzer {
     }
   }
 
+  // Known LP lock/burn addresses
+  private readonly BURN_ADDRESSES = new Set([
+    '1111111111111111111111111111111111111111111', // Generic burn
+    '1nc1nerator11111111111111111111111111111111', // Incinerator
+    'deaddeaddeaddeaddeaddeaddeaddeaddeadde', // Dead wallet prefix
+  ]);
+
+  // Known Raydium AMM program
+  private readonly RAYDIUM_AMM_PROGRAM = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
+
   /**
    * Analyze liquidity pool
    */
@@ -261,10 +271,35 @@ export class ContractAnalyzer {
     lpHolders: string[];
   }> {
     try {
-      // TODO: Implement Raydium/Orca LP detection
-      // For now, return stub data
+      // First, try to get liquidity data from DexScreener
+      const dexData = await this.getLiquidityFromDexScreener(tokenAddress);
 
-      logger.debug('Liquidity analysis (STUB)', { token: tokenAddress });
+      if (dexData.depth > 0) {
+        // If we have DexScreener data, use it for depth
+        // Still need to check LP lock status on-chain
+        const lpLockStatus = await this.checkLPLockStatus(tokenAddress);
+
+        return {
+          locked: lpLockStatus.locked,
+          depth: dexData.depth,
+          lpHolders: lpLockStatus.lpHolders
+        };
+      }
+
+      // Fallback: Try to find Raydium LP for this token
+      const raydiumLP = await this.findRaydiumLP(tokenAddress);
+
+      if (raydiumLP) {
+        const lpLockStatus = await this.checkLPTokenLock(raydiumLP.lpMint);
+
+        return {
+          locked: lpLockStatus.locked,
+          depth: raydiumLP.liquidityUSD,
+          lpHolders: lpLockStatus.holders
+        };
+      }
+
+      logger.debug('No liquidity pool found', { token: tokenAddress.slice(0, 8) });
 
       return {
         locked: false,
@@ -280,6 +315,227 @@ export class ContractAnalyzer {
         lpHolders: []
       };
     }
+  }
+
+  /**
+   * Get liquidity data from DexScreener
+   */
+  private async getLiquidityFromDexScreener(tokenAddress: string): Promise<{ depth: number }> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`,
+        { signal: controller.signal }
+      );
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        return { depth: 0 };
+      }
+
+      const data = await response.json() as { pairs?: any[] };
+      const pairs = data.pairs || [];
+
+      // Find the main SOL pair
+      const mainPair = pairs.find((p: any) =>
+        p.chainId === 'solana' && p.quoteToken?.symbol === 'SOL'
+      ) || pairs[0];
+
+      if (mainPair && mainPair.liquidity?.usd) {
+        return { depth: parseFloat(mainPair.liquidity.usd) };
+      }
+
+      return { depth: 0 };
+
+    } catch (error: any) {
+      logger.debug('Error fetching from DexScreener', { error: error.message });
+      return { depth: 0 };
+    }
+  }
+
+  /**
+   * Check LP lock status on-chain
+   */
+  private async checkLPLockStatus(tokenAddress: string): Promise<{
+    locked: boolean;
+    lpHolders: string[];
+  }> {
+    try {
+      // Find the LP token for this trading pair
+      const raydiumLP = await this.findRaydiumLP(tokenAddress);
+
+      if (!raydiumLP) {
+        return { locked: false, lpHolders: [] };
+      }
+
+      const result = await this.checkLPTokenLock(raydiumLP.lpMint);
+      return { locked: result.locked, lpHolders: result.holders };
+
+    } catch (error: any) {
+      logger.debug('Error checking LP lock status', { error: error.message });
+      return { locked: false, lpHolders: [] };
+    }
+  }
+
+  /**
+   * Find Raydium LP for a token
+   */
+  private async findRaydiumLP(tokenAddress: string): Promise<{
+    lpMint: string;
+    liquidityUSD: number;
+  } | null> {
+    try {
+      const tokenPubkey = new PublicKey(tokenAddress);
+
+      // Get accounts associated with the Raydium AMM program that involve this token
+      const accounts = await this.connection.getProgramAccounts(
+        this.RAYDIUM_AMM_PROGRAM,
+        {
+          filters: [
+            { dataSize: 752 }, // Raydium AMM pool account size
+          ]
+        }
+      );
+
+      // Look for pools that contain our token
+      for (const account of accounts.slice(0, 50)) { // Limit to avoid timeout
+        try {
+          const data = account.account.data;
+
+          // Raydium pool structure: baseMint at offset 400, quoteMint at offset 432
+          // lpMint at offset 464
+          const baseMint = new PublicKey(data.slice(400, 432)).toBase58();
+          const quoteMint = new PublicKey(data.slice(432, 464)).toBase58();
+          const lpMint = new PublicKey(data.slice(464, 496)).toBase58();
+
+          if (baseMint === tokenAddress || quoteMint === tokenAddress) {
+            logger.debug('Found Raydium LP', { lpMint: lpMint.slice(0, 8) });
+
+            return {
+              lpMint,
+              liquidityUSD: 0 // Will be populated from DexScreener
+            };
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      return null;
+
+    } catch (error: any) {
+      logger.debug('Error finding Raydium LP', { error: error.message });
+      return null;
+    }
+  }
+
+  /**
+   * Check if LP tokens are locked or burned
+   */
+  private async checkLPTokenLock(lpMint: string): Promise<{
+    locked: boolean;
+    holders: string[];
+  }> {
+    try {
+      const lpMintPubkey = new PublicKey(lpMint);
+      const mintInfo = await getMint(this.connection, lpMintPubkey);
+      const totalSupply = Number(mintInfo.supply);
+
+      if (totalSupply === 0) {
+        return { locked: false, holders: [] };
+      }
+
+      // Get all LP token holders
+      const accounts = await this.connection.getProgramAccounts(
+        TOKEN_PROGRAM_ID,
+        {
+          filters: [
+            { dataSize: 165 },
+            {
+              memcmp: {
+                offset: 0,
+                bytes: lpMintPubkey.toBase58()
+              }
+            }
+          ]
+        }
+      );
+
+      const holders: string[] = [];
+      let burnedOrLockedAmount = 0;
+
+      for (const account of accounts) {
+        try {
+          const data = account.account.data;
+          const amount = Number(data.readBigUInt64LE(64));
+          const owner = new PublicKey(data.slice(32, 64)).toBase58();
+
+          if (amount === 0) continue;
+
+          holders.push(owner);
+
+          // Check if this is a burn address
+          if (this.isBurnAddress(owner)) {
+            burnedOrLockedAmount += amount;
+          }
+
+          // Check if owner has no transfer authority (locked)
+          // This is a simplified check - in production, you'd check locker contracts
+        } catch {
+          continue;
+        }
+      }
+
+      // Consider locked if >50% of LP is burned/locked
+      const lockedPercent = burnedOrLockedAmount / totalSupply;
+      const locked = lockedPercent > 0.5;
+
+      logger.debug('LP lock check', {
+        lpMint: lpMint.slice(0, 8),
+        holders: holders.length,
+        lockedPercent: (lockedPercent * 100).toFixed(2) + '%',
+        locked
+      });
+
+      return { locked, holders };
+
+    } catch (error: any) {
+      logger.debug('Error checking LP token lock', { error: error.message });
+      return { locked: false, holders: [] };
+    }
+  }
+
+  /**
+   * Check if an address is a known burn address
+   */
+  private isBurnAddress(address: string): boolean {
+    // Check exact matches
+    if (this.BURN_ADDRESSES.has(address)) {
+      return true;
+    }
+
+    // Check for common burn address patterns
+    const lowerAddress = address.toLowerCase();
+
+    // All 1s or mostly 1s
+    if (/^1{30,}/.test(address)) {
+      return true;
+    }
+
+    // Contains "dead" pattern
+    if (lowerAddress.includes('dead')) {
+      return true;
+    }
+
+    // Contains "burn" pattern
+    if (lowerAddress.includes('burn')) {
+      return true;
+    }
+
+    return false;
   }
 
   /**

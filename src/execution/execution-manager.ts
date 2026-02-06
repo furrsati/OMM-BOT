@@ -14,6 +14,8 @@ import { BuyExecutor, BuyExecutionResult } from './buy-executor';
 import { SellExecutor, SellExecutionResult, SellOrder } from './sell-executor';
 import { EntryDecision, EntryDecisionEngine } from '../conviction/entry-decision';
 import { AggregatedSignal } from '../conviction/signal-aggregator';
+import { query } from '../db/postgres';
+import { PatternMatcher } from '../learning/pattern-matcher';
 
 interface PendingBuyOrder {
   decision: EntryDecision;
@@ -34,6 +36,8 @@ interface ExecutionMetrics {
   averageLatencyMs: number;
   totalLatencyMs: number;
   lastExecutionTime: number;
+  consecutiveHighLatency: number;
+  latencyHistory: number[];
 }
 
 export class ExecutionManager {
@@ -57,8 +61,18 @@ export class ExecutionManager {
     totalRetries: 0,
     averageLatencyMs: 0,
     totalLatencyMs: 0,
-    lastExecutionTime: 0
+    lastExecutionTime: 0,
+    consecutiveHighLatency: 0,
+    latencyHistory: []
   };
+
+  // Latency thresholds
+  private readonly LATENCY_WARNING_MS = 500;
+  private readonly LATENCY_CRITICAL_MS = 1000;
+  private readonly HIGH_LATENCY_THRESHOLD = 3;
+
+  // Pattern matcher for fingerprinting
+  private patternMatcher: PatternMatcher | null = null;
 
   private isRunning: boolean = false;
   private processInterval: NodeJS.Timeout | null = null;
@@ -368,6 +382,13 @@ export class ExecutionManager {
   }
 
   /**
+   * Set pattern matcher for trade fingerprinting
+   */
+  setPatternMatcher(matcher: PatternMatcher): void {
+    this.patternMatcher = matcher;
+  }
+
+  /**
    * Update execution metrics
    */
   private updateMetrics(success: boolean, attempts: number, latencyMs: number): void {
@@ -386,6 +407,56 @@ export class ExecutionManager {
     this.metrics.averageLatencyMs = Math.floor(
       this.metrics.totalLatencyMs / this.metrics.totalExecutions
     );
+
+    // Track latency history (keep last 20)
+    this.metrics.latencyHistory.push(latencyMs);
+    if (this.metrics.latencyHistory.length > 20) {
+      this.metrics.latencyHistory.shift();
+    }
+
+    // Latency monitoring
+    this.monitorLatency(latencyMs);
+  }
+
+  /**
+   * Monitor latency and alert/failover if needed
+   */
+  private monitorLatency(latencyMs: number): void {
+    if (latencyMs > this.LATENCY_CRITICAL_MS) {
+      this.metrics.consecutiveHighLatency++;
+
+      logger.error('🚨 CRITICAL: Execution latency exceeded 1000ms', {
+        latencyMs,
+        consecutive: this.metrics.consecutiveHighLatency,
+        avgLatency: this.metrics.averageLatencyMs
+      });
+
+      // Trigger RPC failover if consistently slow
+      if (this.metrics.consecutiveHighLatency >= this.HIGH_LATENCY_THRESHOLD) {
+        logger.error('🔄 Recommending RPC failover due to persistent high latency', {
+          consecutiveHighLatency: this.metrics.consecutiveHighLatency,
+          recentLatencies: this.metrics.latencyHistory.slice(-5)
+        });
+        // Note: Actual failover is handled by the RPC configuration module
+      }
+
+    } else if (latencyMs > this.LATENCY_WARNING_MS) {
+      logger.warn('⚠️ Execution latency exceeded 500ms', {
+        latencyMs,
+        target: '< 500ms'
+      });
+      // Don't reset consecutive counter for warnings
+
+    } else {
+      // Reset consecutive high latency counter on good latency
+      if (this.metrics.consecutiveHighLatency > 0) {
+        logger.info('✅ Latency normalized', {
+          latencyMs,
+          previousConsecutiveHigh: this.metrics.consecutiveHighLatency
+        });
+      }
+      this.metrics.consecutiveHighLatency = 0;
+    }
   }
 
   /**
@@ -393,16 +464,145 @@ export class ExecutionManager {
    */
   private async logExecution(type: 'buy' | 'sell', result: BuyExecutionResult | SellExecutionResult): Promise<void> {
     try {
-      // STUB: In production, log to trades table
-      logger.debug('Execution logged (STUB)', {
-        type,
-        success: result.success,
-        token: result.tokenAddress.slice(0, 8)
-      });
+      if (type === 'buy') {
+        const buyResult = result as BuyExecutionResult;
+
+        // Create trade entry for buy
+        await query(
+          `INSERT INTO trades (
+            id, token_address, entry_price, entry_amount, entry_time,
+            conviction_score, fingerprint, created_at
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, NOW(),
+            $4, $5, NOW()
+          )
+          ON CONFLICT DO NOTHING`,
+          [
+            buyResult.tokenAddress,
+            buyResult.entryPrice || 0,
+            buyResult.amountSOL || 0,
+            0, // Conviction score will be filled from decision
+            JSON.stringify({
+              txSignature: buyResult.txSignature,
+              tokensReceived: buyResult.tokensReceived,
+              slippage: buyResult.slippage,
+              priorityFee: buyResult.priorityFee,
+              executionLatencyMs: buyResult.executionLatencyMs,
+              attempts: buyResult.attempts
+            })
+          ]
+        );
+
+        logger.debug('Buy execution logged to database', {
+          token: buyResult.tokenAddress.slice(0, 8),
+          success: buyResult.success,
+          latencyMs: buyResult.executionLatencyMs
+        });
+
+      } else {
+        const sellResult = result as SellExecutionResult;
+
+        // Calculate P&L from exit price (solReceived is what we got back)
+        const solReceived = sellResult.solReceived || 0;
+        const exitPrice = sellResult.exitPrice || 0;
+
+        // Update existing trade with exit data
+        await query(
+          `UPDATE trades SET
+            exit_price = $1,
+            exit_amount = $2,
+            exit_time = NOW(),
+            profit_loss = COALESCE($2, 0) - COALESCE(entry_amount, 0),
+            profit_loss_percent = CASE
+              WHEN COALESCE(entry_amount, 0) > 0
+              THEN ((COALESCE($2, 0) - COALESCE(entry_amount, 0)) / entry_amount) * 100
+              ELSE 0
+            END,
+            outcome = CASE
+              WHEN COALESCE($2, 0) > COALESCE(entry_amount, 0) THEN 'WIN'
+              ELSE 'LOSS'
+            END,
+            exit_reason = $3,
+            fingerprint = fingerprint || $4,
+            updated_at = NOW()
+          WHERE token_address = $5
+          AND exit_time IS NULL`,
+          [
+            exitPrice,
+            solReceived,
+            sellResult.reason || 'unknown',
+            JSON.stringify({
+              sellTxSignature: sellResult.txSignature,
+              tokensSold: sellResult.tokensSold,
+              executionLatencyMs: sellResult.executionLatencyMs,
+              attempts: sellResult.attempts
+            }),
+            sellResult.tokenAddress
+          ]
+        );
+
+        logger.debug('Sell execution logged to database', {
+          token: sellResult.tokenAddress.slice(0, 8),
+          success: sellResult.success,
+          solReceived,
+          latencyMs: sellResult.executionLatencyMs
+        });
+
+        // Trigger learning engine update if pattern matcher is available
+        if (this.patternMatcher && sellResult.success && solReceived > 0) {
+          try {
+            // Get the trade for fingerprinting
+            const tradeResult = await query<any>(
+              `SELECT * FROM trades WHERE token_address = $1 ORDER BY created_at DESC LIMIT 1`,
+              [sellResult.tokenAddress]
+            );
+
+            if (tradeResult.rows.length > 0) {
+              const trade = tradeResult.rows[0];
+              const fingerprint = await this.patternMatcher.createFingerprint(trade);
+              await this.patternMatcher.storeTradePattern(trade, fingerprint);
+
+              logger.debug('Trade fingerprint stored for learning', {
+                token: sellResult.tokenAddress.slice(0, 8)
+              });
+            }
+          } catch (learnError: any) {
+            logger.debug('Error storing trade pattern', { error: learnError.message });
+          }
+        }
+      }
 
     } catch (error: any) {
-      logger.error('Failed to log execution', { error: error.message });
+      logger.error('Failed to log execution to database', {
+        type,
+        token: result.tokenAddress.slice(0, 8),
+        error: error.message
+      });
     }
+  }
+
+  /**
+   * Get latency statistics
+   */
+  getLatencyStats() {
+    const history = this.metrics.latencyHistory;
+    if (history.length === 0) {
+      return { min: 0, max: 0, avg: 0, p50: 0, p95: 0 };
+    }
+
+    const sorted = [...history].sort((a, b) => a - b);
+    const p50Index = Math.floor(sorted.length * 0.5);
+    const p95Index = Math.floor(sorted.length * 0.95);
+
+    return {
+      min: sorted[0],
+      max: sorted[sorted.length - 1],
+      avg: this.metrics.averageLatencyMs,
+      p50: sorted[p50Index],
+      p95: sorted[Math.min(p95Index, sorted.length - 1)],
+      recentHistory: history.slice(-10),
+      consecutiveHighLatency: this.metrics.consecutiveHighLatency
+    };
   }
 
   /**

@@ -1,5 +1,6 @@
-import { Connection } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { logger } from '../utils/logger';
+import { query } from '../db/postgres';
 
 /**
  * ON-CHAIN SOCIAL INTELLIGENCE SYSTEM
@@ -310,15 +311,180 @@ export class OnChainSocialIntelligence {
    * Get recent buyers for a token (last N minutes)
    */
   private async getRecentBuyers(
-        _tokenAddress: string,
-        _minutes: number
+    tokenAddress: string,
+    minutes: number
   ): Promise<BuyerProfile[]> {
-    // TODO: Implement in Phase 2 with actual RPC calls
-    // This will use getSignaturesForAddress to get recent transactions
-    // and parse buy transactions
+    const buyers: BuyerProfile[] = [];
 
-    // For now, return mock data for testing
-    return [];
+    try {
+      const tokenPubkey = new PublicKey(tokenAddress);
+      const cutoffTime = Math.floor(Date.now() / 1000) - (minutes * 60);
+
+      // Get recent signatures for the token
+      const signatures = await this.connection.getSignaturesForAddress(
+        tokenPubkey,
+        { limit: 100 },
+        'confirmed'
+      );
+
+      // Filter to recent and process
+      const recentSigs = signatures.filter(s => s.blockTime && s.blockTime > cutoffTime);
+
+      for (const sig of recentSigs.slice(0, 30)) { // Limit to avoid rate limits
+        try {
+          const tx = await this.connection.getParsedTransaction(
+            sig.signature,
+            { maxSupportedTransactionVersion: 0 }
+          );
+
+          if (!tx || !tx.meta) continue;
+
+          // Look for token balance increases (buys)
+          const postBalances = tx.meta.postTokenBalances || [];
+          const preBalances = tx.meta.preTokenBalances || [];
+
+          for (const post of postBalances) {
+            if (post.mint !== tokenAddress) continue;
+
+            const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
+            const preAmount = parseInt(pre?.uiTokenAmount?.amount || '0');
+            const postAmount = parseInt(post.uiTokenAmount?.amount || '0');
+
+            // If balance increased, this is a buy
+            if (postAmount > preAmount && post.owner) {
+              const walletAddress = post.owner;
+              const buyAmount = postAmount - preAmount;
+
+              // Get wallet history from database
+              const walletHistory = await this.getWalletHistory(walletAddress);
+
+              buyers.push({
+                walletAddress,
+                historicalWinRate: walletHistory.winRate,
+                averageReturn: walletHistory.avgReturn,
+                totalTrades: walletHistory.totalTrades,
+                isNewWallet: walletHistory.totalTrades < 5,
+                connectedToRugs: await this.checkRugConnection(walletAddress),
+                buyTimestamp: new Date((sig.blockTime || 0) * 1000),
+                buyAmount
+              });
+            }
+          }
+        } catch (txError: any) {
+          logger.debug('Error parsing transaction', { error: txError.message });
+          continue;
+        }
+      }
+
+      logger.debug(`Found ${buyers.length} recent buyers`, {
+        token: tokenAddress.slice(0, 8),
+        minutes
+      });
+
+      return buyers;
+
+    } catch (error: any) {
+      logger.error('Error getting recent buyers', { error: error.message });
+      return [];
+    }
+  }
+
+  /**
+   * Get wallet trading history from database
+   */
+  private async getWalletHistory(walletAddress: string): Promise<{
+    winRate: number;
+    avgReturn: number;
+    totalTrades: number;
+  }> {
+    try {
+      // Check smart_wallets table first
+      const walletResult = await query<{
+        win_rate: string;
+        average_return: string;
+        total_trades: number;
+      }>(
+        `SELECT win_rate, average_return, total_trades
+         FROM smart_wallets WHERE address = $1`,
+        [walletAddress]
+      );
+
+      if (walletResult.rows.length > 0) {
+        const w = walletResult.rows[0];
+        return {
+          winRate: parseFloat(w.win_rate) || 0,
+          avgReturn: parseFloat(w.average_return) || 0,
+          totalTrades: w.total_trades || 0
+        };
+      }
+
+      // Check trades table for this wallet's performance
+      const tradesResult = await query<{
+        total: string;
+        wins: string;
+        avg_return: string;
+      }>(
+        `SELECT
+           COUNT(*) as total,
+           COUNT(CASE WHEN outcome = 'WIN' THEN 1 END) as wins,
+           AVG(profit_loss_percent) as avg_return
+         FROM trades
+         WHERE fingerprint->'smartWallets'->'addresses' ? $1
+         AND exit_time IS NOT NULL`,
+        [walletAddress]
+      );
+
+      if (tradesResult.rows.length > 0) {
+        const t = tradesResult.rows[0];
+        const total = parseInt(t.total) || 0;
+        const wins = parseInt(t.wins) || 0;
+        return {
+          winRate: total > 0 ? wins / total : 0,
+          avgReturn: parseFloat(t.avg_return) || 0,
+          totalTrades: total
+        };
+      }
+
+      // No history found
+      return { winRate: 0, avgReturn: 0, totalTrades: 0 };
+
+    } catch (error: any) {
+      logger.debug('Error getting wallet history', { error: error.message });
+      return { winRate: 0, avgReturn: 0, totalTrades: 0 };
+    }
+  }
+
+  /**
+   * Check if wallet is connected to known rugs
+   */
+  private async checkRugConnection(walletAddress: string): Promise<boolean> {
+    try {
+      // Check blacklist table
+      const blacklistResult = await query<{ address: string }>(
+        `SELECT address FROM blacklist
+         WHERE address = $1 OR associated_wallets ? $1`,
+        [walletAddress]
+      );
+
+      if (blacklistResult.rows.length > 0) {
+        return true;
+      }
+
+      // Check if wallet participated in any rug trades
+      const rugResult = await query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM trades
+         WHERE fingerprint->'smartWallets'->'addresses' ? $1
+         AND outcome = 'RUG'`,
+        [walletAddress]
+      );
+
+      const rugCount = parseInt(rugResult.rows[0]?.count || '0');
+      return rugCount > 0;
+
+    } catch (error: any) {
+      logger.debug('Error checking rug connection', { error: error.message });
+      return false;
+    }
   }
 
   /**

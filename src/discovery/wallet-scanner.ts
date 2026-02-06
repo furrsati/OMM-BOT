@@ -10,6 +10,7 @@
 
 import { Connection, PublicKey, ParsedTransactionWithMeta } from '@solana/web3.js';
 import { logger } from '../utils/logger';
+import { query } from '../db/postgres';
 
 interface TokenPerformance {
   address: string;
@@ -123,31 +124,272 @@ export class WalletScanner {
   /**
    * Find tokens that achieved 5×–50× gains in last 7 days
    *
-   * NOTE: This is a STUB implementation. In production, this would:
-   * - Query a price data service (Birdeye, Jupiter, etc.)
-   * - Track historical price data from own database
-   * - Use DEX aggregator APIs
-   *
-   * For now, returns empty array (will be populated when price feeds are built)
+   * Uses DexScreener API to find trending Solana tokens and filter
+   * for those that achieved significant gains from launch.
    */
   private async findWinningTokens(): Promise<TokenPerformance[]> {
-    logger.debug('Scanning for winning tokens (STUB - needs price data integration)');
+    logger.info('🔍 Scanning for winning tokens via DexScreener...');
 
-    // STUB: In production, query price data service or database
-    // Example query:
-    // SELECT token_address, launch_time, launch_price, peak_price
-    // FROM token_prices
-    // WHERE (peak_price / launch_price) BETWEEN 5 AND 50
-    // AND launch_time > NOW() - INTERVAL '7 days'
+    const winningTokens: TokenPerformance[] = [];
 
-    // REDIS REMOVED - caching disabled
-    // const cached = await this.redis.get('winning_tokens_cache');
-    // if (cached) {
-    //   return JSON.parse(cached);
-    // }
+    try {
+      // Fetch trending tokens from DexScreener
+      const trendingResponse = await this.fetchWithRetry(
+        'https://api.dexscreener.com/token-boosts/top/v1',
+        { timeout: 15000 }
+      );
 
-    // For now, return empty (Phase 2 will connect to price feeds)
-    return [];
+      if (!trendingResponse.ok) {
+        logger.warn('DexScreener trending API failed, trying search API');
+        return await this.findWinningTokensViaSearch();
+      }
+
+      const trendingData = await trendingResponse.json() as any[];
+
+      // Filter for Solana tokens
+      const solanaTrending = (Array.isArray(trendingData) ? trendingData : []).filter(
+        (t: any) => t.chainId === 'solana'
+      ).slice(0, 50); // Limit to top 50
+
+      logger.info(`Found ${solanaTrending.length} trending Solana tokens`);
+
+      // For each trending token, get detailed price data
+      for (const token of solanaTrending) {
+        try {
+          const tokenData = await this.getTokenPerformance(token.tokenAddress);
+          if (tokenData && tokenData.multiplier >= 5 && tokenData.multiplier <= 50) {
+            winningTokens.push(tokenData);
+            logger.debug(`Found winning token: ${token.tokenAddress.slice(0, 8)}... (${tokenData.multiplier.toFixed(1)}x)`);
+          }
+        } catch (error: any) {
+          logger.debug(`Error fetching token ${token.tokenAddress}: ${error.message}`);
+        }
+
+        // Rate limit: 300ms between requests
+        await this.sleep(300);
+      }
+
+      // Also check recent token profiles
+      const profilesResponse = await this.fetchWithRetry(
+        'https://api.dexscreener.com/token-profiles/latest/v1',
+        { timeout: 15000 }
+      );
+
+      if (profilesResponse.ok) {
+        const profilesData = await profilesResponse.json() as any[];
+        const solanaProfiles = (Array.isArray(profilesData) ? profilesData : []).filter(
+          (t: any) => t.chainId === 'solana'
+        ).slice(0, 30);
+
+        for (const token of solanaProfiles) {
+          try {
+            // Skip if already processed
+            if (winningTokens.some(w => w.address === token.tokenAddress)) continue;
+
+            const tokenData = await this.getTokenPerformance(token.tokenAddress);
+            if (tokenData && tokenData.multiplier >= 5 && tokenData.multiplier <= 50) {
+              winningTokens.push(tokenData);
+            }
+          } catch (error: any) {
+            logger.debug(`Error fetching token profile ${token.tokenAddress}: ${error.message}`);
+          }
+
+          await this.sleep(300);
+        }
+      }
+
+      logger.info(`✅ Found ${winningTokens.length} winning tokens (5x-50x gains)`);
+
+      return winningTokens;
+
+    } catch (error: any) {
+      logger.error('Error finding winning tokens', { error: error.message });
+      return [];
+    }
+  }
+
+  /**
+   * Alternative method to find winning tokens via search
+   */
+  private async findWinningTokensViaSearch(): Promise<TokenPerformance[]> {
+    const winningTokens: TokenPerformance[] = [];
+
+    try {
+      // Search for recent Solana pairs
+      const searchResponse = await this.fetchWithRetry(
+        'https://api.dexscreener.com/latest/dex/search?q=SOL',
+        { timeout: 15000 }
+      );
+
+      if (!searchResponse.ok) return [];
+
+      const searchData = await searchResponse.json() as { pairs?: any[] };
+      const pairs = (searchData.pairs || []).filter(
+        (p: any) => p.chainId === 'solana' && p.dexId === 'raydium'
+      ).slice(0, 50);
+
+      for (const pair of pairs) {
+        try {
+          const tokenData = await this.getTokenPerformanceFromPair(pair);
+          if (tokenData && tokenData.multiplier >= 5 && tokenData.multiplier <= 50) {
+            winningTokens.push(tokenData);
+          }
+        } catch (error: any) {
+          logger.debug(`Error processing pair: ${error.message}`);
+        }
+
+        await this.sleep(300);
+      }
+
+      return winningTokens;
+    } catch (error: any) {
+      logger.error('Error in search-based token finding', { error: error.message });
+      return [];
+    }
+  }
+
+  /**
+   * Get token performance data from DexScreener
+   */
+  private async getTokenPerformance(tokenAddress: string): Promise<TokenPerformance | null> {
+    try {
+      const response = await this.fetchWithRetry(
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`,
+        { timeout: 10000 }
+      );
+
+      if (!response.ok) return null;
+
+      const data = await response.json() as { pairs?: any[] };
+      const pairs = data.pairs || [];
+
+      // Find the main SOL pair (usually first)
+      const mainPair = pairs.find((p: any) =>
+        p.chainId === 'solana' && p.quoteToken?.symbol === 'SOL'
+      ) || pairs[0];
+
+      if (!mainPair) return null;
+
+      // Calculate performance metrics
+      const priceChange24h = parseFloat(mainPair.priceChange?.h24 || '0');
+      const currentPrice = parseFloat(mainPair.priceUsd || '0');
+
+      // Estimate launch price from 24h change (rough approximation)
+      // For more accurate data, we'd need historical price API
+      const priceMultiplier24h = 1 + (priceChange24h / 100);
+
+      // Check if this looks like a recent winner
+      // Use creation timestamp if available
+      const pairCreatedAt = mainPair.pairCreatedAt || Date.now();
+      const ageInDays = (Date.now() - pairCreatedAt) / (1000 * 60 * 60 * 24);
+
+      // Only consider tokens less than 7 days old with significant gains
+      if (ageInDays > 7) return null;
+
+      // Estimate multiplier from available data
+      // DexScreener provides priceChange for various periods
+      const priceChange6h = parseFloat(mainPair.priceChange?.h6 || '0');
+      const priceChange1h = parseFloat(mainPair.priceChange?.h1 || '0');
+
+      // Rough multiplier estimation
+      let estimatedMultiplier = 1;
+      if (priceChange24h > 0) {
+        estimatedMultiplier = Math.max(estimatedMultiplier, priceMultiplier24h);
+      }
+
+      // If we have FDV and initial supply data, calculate more accurately
+      const fdv = parseFloat(mainPair.fdv || '0');
+      const liquidity = parseFloat(mainPair.liquidity?.usd || '0');
+
+      // Heuristic: high FDV/liquidity ratio often indicates significant gains
+      if (fdv > 0 && liquidity > 0) {
+        const fdvToLiquidityRatio = fdv / liquidity;
+        if (fdvToLiquidityRatio > 10) {
+          estimatedMultiplier = Math.max(estimatedMultiplier, Math.sqrt(fdvToLiquidityRatio));
+        }
+      }
+
+      // Filter: only return if multiplier is in target range
+      if (estimatedMultiplier < 5 || estimatedMultiplier > 50) {
+        return null;
+      }
+
+      const launchPrice = currentPrice / estimatedMultiplier;
+
+      return {
+        address: tokenAddress,
+        launchTime: Math.floor(pairCreatedAt / 1000),
+        launchPrice,
+        peakPrice: currentPrice,
+        multiplier: estimatedMultiplier
+      };
+    } catch (error: any) {
+      logger.debug(`Error getting token performance for ${tokenAddress}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Get token performance from a pair object
+   */
+  private getTokenPerformanceFromPair(pair: any): TokenPerformance | null {
+    try {
+      const priceChange24h = parseFloat(pair.priceChange?.h24 || '0');
+      const currentPrice = parseFloat(pair.priceUsd || '0');
+      const pairCreatedAt = pair.pairCreatedAt || Date.now();
+
+      const ageInDays = (Date.now() - pairCreatedAt) / (1000 * 60 * 60 * 24);
+      if (ageInDays > 7) return null;
+
+      const priceMultiplier = 1 + (priceChange24h / 100);
+      if (priceMultiplier < 5 || priceMultiplier > 50) return null;
+
+      return {
+        address: pair.baseToken?.address || '',
+        launchTime: Math.floor(pairCreatedAt / 1000),
+        launchPrice: currentPrice / priceMultiplier,
+        peakPrice: currentPrice,
+        multiplier: priceMultiplier
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch with retry and timeout
+   */
+  private async fetchWithRetry(
+    url: string,
+    options: { timeout?: number; retries?: number } = {}
+  ): Promise<Response> {
+    const { timeout = 10000, retries = 3 } = options;
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'OMM-Bot/1.0'
+          }
+        });
+
+        clearTimeout(timeoutId);
+        return response;
+      } catch (error: any) {
+        if (attempt === retries) {
+          throw error;
+        }
+        logger.debug(`Fetch attempt ${attempt} failed, retrying...`);
+        await this.sleep(1000 * attempt);
+      }
+    }
+
+    throw new Error('Max retries exceeded');
   }
 
   /**
@@ -448,17 +690,24 @@ export class WalletScanner {
       // Get recent transaction history
       const signatures = await this.connection.getSignaturesForAddress(
         pubkey,
-        { limit: 50 },
+        { limit: 100 },
         'confirmed'
       );
 
       if (signatures.length < 10) return false; // Not enough data
 
-      const quickSellCount = 0;
+      let quickSellCount = 0;
       let totalTrades = 0;
+      let sandwichPatterns = 0;
+      let frontrunPatterns = 0;
+      let atomicArbPatterns = 0;
+
+      // Track buy/sell pairs for quick sell detection
+      const tokenBuys: Map<string, number> = new Map(); // token -> buyTime
+      const slotCounts: Map<number, number> = new Map(); // slot -> txCount
 
       // Analyze transaction patterns
-      for (const sig of signatures.slice(0, 20)) {
+      for (const sig of signatures.slice(0, 50)) {
         const tx = await this.connection.getParsedTransaction(
           sig.signature,
           { maxSupportedTransactionVersion: 0 }
@@ -466,19 +715,100 @@ export class WalletScanner {
 
         if (!tx || !tx.meta) continue;
 
-        // Look for quick buy-sell patterns (< 5 minutes)
-        // This is a simplified heuristic
+        const slot = tx.slot;
+        slotCounts.set(slot, (slotCounts.get(slot) || 0) + 1);
+
+        // Check for atomic arbitrage (multiple DEX interactions in one tx)
+        const innerInstructions = tx.meta.innerInstructions || [];
+        const programIds = new Set<string>();
+
+        for (const inner of innerInstructions) {
+          for (const instruction of inner.instructions) {
+            if ('programId' in instruction) {
+              programIds.add(instruction.programId.toBase58());
+            }
+          }
+        }
+
+        // Known DEX program IDs
+        const dexPrograms = [
+          '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM
+          'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', // Orca Whirlpools
+          'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', // Jupiter
+        ];
+
+        const dexInteractions = dexPrograms.filter(p => programIds.has(p)).length;
+        if (dexInteractions >= 2) {
+          atomicArbPatterns++;
+        }
+
+        // Check token balance changes for buy/sell detection
+        const preBalances = tx.meta.preTokenBalances || [];
+        const postBalances = tx.meta.postTokenBalances || [];
+
+        for (const post of postBalances) {
+          if (!post.mint || !post.owner) continue;
+
+          const pre = preBalances.find(
+            p => p.accountIndex === post.accountIndex
+          );
+
+          const preAmount = parseInt(pre?.uiTokenAmount?.amount || '0');
+          const postAmount = parseInt(post.uiTokenAmount?.amount || '0');
+
+          if (postAmount > preAmount) {
+            // Buy detected
+            tokenBuys.set(post.mint, sig.blockTime || Date.now() / 1000);
+          } else if (preAmount > postAmount && sig.blockTime) {
+            // Sell detected - check if quick sell
+            const buyTime = tokenBuys.get(post.mint);
+            if (buyTime && (sig.blockTime - buyTime) < 300) { // < 5 minutes
+              quickSellCount++;
+            }
+          }
+        }
+
         totalTrades++;
+      }
+
+      // Detect sandwich attack pattern: multiple txs in same slot
+      for (const [, count] of slotCounts) {
+        if (count >= 2) {
+          sandwichPatterns++;
+        }
+      }
+
+      // Detect frontrunning: consistently enters 1-2 slots before large trades
+      // Check for abnormally high frequency trading
+      const avgTxPerSlot = signatures.length / slotCounts.size;
+      if (avgTxPerSlot > 1.5) {
+        frontrunPatterns = Math.floor(avgTxPerSlot);
       }
 
       // If more than 80% are quick sells, likely a dump bot
       const quickSellRate = quickSellCount / Math.max(totalTrades, 1);
       if (quickSellRate > 0.8) {
-        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as dump bot`);
+        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as dump bot (${(quickSellRate * 100).toFixed(0)}% quick sells)`);
         return true;
       }
 
-      // TODO: Add MEV pattern detection (sandwich attacks, frontrunning)
+      // If atomic arbitrage pattern detected frequently
+      if (atomicArbPatterns >= 3) {
+        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as atomic arb bot (${atomicArbPatterns} patterns)`);
+        return true;
+      }
+
+      // If sandwich patterns detected
+      if (sandwichPatterns >= 5) {
+        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as sandwich bot (${sandwichPatterns} patterns)`);
+        return true;
+      }
+
+      // If high frequency trading pattern
+      if (frontrunPatterns >= 3 && totalTrades > 30) {
+        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as frontrun bot (${frontrunPatterns} avg tx/slot)`);
+        return true;
+      }
 
       return false;
 
@@ -493,30 +823,57 @@ export class WalletScanner {
    */
   private async cacheAlphaWallets(buyers: EarlyBuyer[]): Promise<void> {
     try {
-      // REDIS REMOVED - caching disabled
-      // for (const buyer of buyers) {
-      //   const key = `alpha_wallet:${buyer.walletAddress}`;
+      for (const buyer of buyers) {
+        // Check if wallet already exists in smart_wallets table
+        const existingResult = await query<{ address: string; tokens_entered: number }>(
+          `SELECT address, tokens_entered FROM smart_wallets WHERE address = $1`,
+          [buyer.walletAddress]
+        );
 
-      //   // Get existing data
-      //   const existing = await this.redis.get(key);
-      //   const data = existing ? JSON.parse(existing) : {
-      //     address: buyer.walletAddress,
-      //     tokens: [],
-      //     lastUpdated: Date.now()
-      //   };
+        if (existingResult.rows.length > 0) {
+          // Update existing wallet - increment tokens count and update last active
+          await query(
+            `UPDATE smart_wallets
+             SET tokens_entered = tokens_entered + 1,
+                 last_active = NOW(),
+                 updated_at = NOW()
+             WHERE address = $1`,
+            [buyer.walletAddress]
+          );
+        } else {
+          // Insert new wallet as Tier 3 (unproven, needs scoring)
+          await query(
+            `INSERT INTO smart_wallets
+             (address, tier, score, win_rate, average_return, tokens_entered, last_active, total_trades, successful_trades, average_hold_time, is_active)
+             VALUES ($1, 3, 0, 0, 0, 1, NOW(), 0, 0, 0, true)
+             ON CONFLICT (address) DO UPDATE
+             SET tokens_entered = smart_wallets.tokens_entered + 1,
+                 last_active = NOW(),
+                 updated_at = NOW()`,
+            [buyer.walletAddress]
+          );
+        }
 
-      //   // Add this token to their history
-      //   if (!data.tokens.includes(buyer.tokenAddress)) {
-      //     data.tokens.push(buyer.tokenAddress);
-      //   }
+        // Also cache the discovery event for later analysis
+        await query(
+          `INSERT INTO cache (key, value, expires_at)
+           VALUES ($1, $2, NOW() + INTERVAL '30 days')
+           ON CONFLICT (key) DO UPDATE
+           SET value = $2, expires_at = NOW() + INTERVAL '30 days'`,
+          [
+            `alpha_discovery:${buyer.walletAddress}:${buyer.tokenAddress}`,
+            JSON.stringify({
+              walletAddress: buyer.walletAddress,
+              tokenAddress: buyer.tokenAddress,
+              buyTime: buyer.buyTime,
+              secondsAfterLaunch: buyer.secondsAfterLaunch,
+              discoveredAt: Date.now()
+            })
+          ]
+        );
+      }
 
-      //   data.lastUpdated = Date.now();
-
-      //   // Cache for 30 days
-      //   await this.redis.setEx(key, 30 * 24 * 60 * 60, JSON.stringify(data));
-      // }
-
-      logger.debug(`Would cache ${buyers.length} alpha wallets (Redis disabled)`);
+      logger.info(`✅ Cached ${buyers.length} alpha wallets to database`);
 
     } catch (error: any) {
       logger.error('Error caching alpha wallets', { error: error.message });

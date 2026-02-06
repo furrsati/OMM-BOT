@@ -217,7 +217,7 @@ async function main() {
 
     logger.info('📈 Initializing Hype Detector...');
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const hypeDetector = new HypeDetector();
+    const hypeDetector = new HypeDetector(connection);
     logger.info('✅ Hype Detector initialized');
 
     // ============================================================

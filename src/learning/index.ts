@@ -18,5 +18,7 @@ export { WeightOptimizer } from './weight-optimizer';
 export { ParameterTuner } from './parameter-tuner';
 export { MetaLearner } from './meta-learner';
 export { LearningScheduler } from './learning-scheduler';
-export type { LearningSnapshot, PerformanceMetrics, LearningImpact } from './meta-learner';
 export type { LearningSchedulerStatus } from './learning-scheduler';
+
+// Re-export types from main types file
+export type { LearningSnapshot, CategoryWeights } from '../types';

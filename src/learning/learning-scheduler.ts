@@ -259,19 +259,16 @@ export class LearningScheduler {
       const snapshots = await this.metaLearner.getAvailableSnapshots();
 
       if (snapshots.length >= 2) {
-        const before = snapshots[1]; // Previous
-        const after = snapshots[0]; // Current
+        // Evaluate adjustment impacts
+        const impacts = await this.metaLearner.evaluateAdjustmentImpacts();
 
-        // Evaluate impact
-        const impact = await this.metaLearner.evaluateLearningImpact(before, after);
-
-        // Adjust learning rate if needed
-        await this.metaLearner.adjustLearningRate(impact);
+        // Get health status which includes learning rate adjustments
+        const health = await this.metaLearner.getLearningHealthStatus();
 
         logger.info('Meta-learning review result', {
-          improved: impact.improved,
-          degraded: impact.degraded,
-          reason: impact.reason
+          impactsEvaluated: impacts.length,
+          healthStatus: health.overallHealth,
+          improvementRate: health.recentImprovementRate
         });
       }
 
@@ -463,5 +460,49 @@ export class LearningScheduler {
    */
   async getCurrentWeights(): Promise<any> {
     return await this.weightOptimizer.getCurrentWeights();
+  }
+
+  /**
+   * Reset a category weight to its default value
+   */
+  async resetWeight(name: string): Promise<void> {
+    logger.info('Resetting weight to default', { name });
+    // Reset specific category or all weights
+    const categoryKey = name as keyof import('../types').CategoryWeights;
+    await this.weightOptimizer.resetToDefault(categoryKey);
+  }
+
+  /**
+   * Reset a parameter to its default value
+   */
+  async resetParameter(name: string): Promise<void> {
+    logger.info('Resetting parameter to default', { name });
+    // Reset by re-running tuning cycle which resets to optimal values
+    // In production, this would restore from default config
+    const defaultParams: Record<string, number> = {
+      dipEntryMin: 20,
+      dipEntryMax: 30,
+      stopLossPercent: 25,
+      trailingStopPercent: 15,
+      timeBasedStopHours: 4,
+      smartWalletThreshold: 2,
+    };
+
+    if (name in defaultParams) {
+      await db.query(
+        `INSERT INTO bot_settings (key, value, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+        [name, JSON.stringify(defaultParams[name])]
+      );
+    }
+  }
+
+  /**
+   * Apply a learning snapshot (revert to previous state)
+   */
+  async applySnapshot(snapshot: { version: number; weights: any; parameters: any }): Promise<void> {
+    logger.info('Applying learning snapshot', { version: snapshot.version });
+    await this.metaLearner.revertToSnapshot(snapshot.version);
   }
 }

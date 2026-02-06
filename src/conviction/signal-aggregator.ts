@@ -104,7 +104,7 @@ export class SignalAggregator {
     this.priceFeed = priceFeed;
     this.regimeDetector = regimeDetector;
     this.socialIntel = new OnChainSocialIntelligence(connection);
-    this.hypeDetector = new HypeDetector();
+    this.hypeDetector = new HypeDetector(connection);
   }
 
   /**

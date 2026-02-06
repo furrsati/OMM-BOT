@@ -1,3 +1,5 @@
+import { Connection, PublicKey } from '@solana/web3.js';
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { logger } from '../utils/logger';
 import axios from 'axios';
 
@@ -20,8 +22,16 @@ export interface HypeMetrics {
 }
 
 export class HypeDetector {
+  private connection: Connection;
   private dexScreenerBaseUrl = 'https://api.dexscreener.com/latest/dex';
   private birdeyeBaseUrl = 'https://public-api.birdeye.so';
+
+  // Cache for holder counts (to calculate growth rate)
+  private holderCountCache: Map<string, { count: number; timestamp: number }[]> = new Map();
+
+  constructor(connection: Connection) {
+    this.connection = connection;
+  }
 
   /**
    * Get hype metrics for a token (FREE - no API keys needed)
@@ -100,30 +110,203 @@ export class HypeDetector {
 
   /**
    * Calculate holder growth rate from on-chain data
-   * This requires your RPC connection to query token accounts
+   * Returns holders per hour based on recent measurements
    */
-  private async calculateHolderGrowthRate(_tokenAddress: string): Promise<number> {
-    // TODO: Implement using Solana RPC
-    // For now, return 0 (will implement in Phase 2)
-    return 0;
+  private async calculateHolderGrowthRate(tokenAddress: string): Promise<number> {
+    try {
+      // Get current holder count
+      const currentCount = await this.getHolderCount(tokenAddress);
+
+      // Get cached history
+      const history = this.holderCountCache.get(tokenAddress) || [];
+
+      // Add current measurement
+      const now = Date.now();
+      history.push({ count: currentCount, timestamp: now });
+
+      // Keep only last hour of history
+      const oneHourAgo = now - (60 * 60 * 1000);
+      const recentHistory = history.filter(h => h.timestamp > oneHourAgo);
+      this.holderCountCache.set(tokenAddress, recentHistory);
+
+      // Need at least 2 measurements to calculate rate
+      if (recentHistory.length < 2) {
+        return 0;
+      }
+
+      // Calculate growth rate
+      const oldest = recentHistory[0];
+      const newest = recentHistory[recentHistory.length - 1];
+
+      const holderChange = newest.count - oldest.count;
+      const timeElapsedHours = (newest.timestamp - oldest.timestamp) / (60 * 60 * 1000);
+
+      if (timeElapsedHours === 0) return 0;
+
+      const growthRate = holderChange / timeElapsedHours;
+
+      logger.debug('Holder growth rate calculated', {
+        token: tokenAddress.slice(0, 8),
+        oldestCount: oldest.count,
+        newestCount: newest.count,
+        growthRate: growthRate.toFixed(2) + '/hour'
+      });
+
+      return Math.max(0, growthRate);
+
+    } catch (error: any) {
+      logger.debug('Error calculating holder growth rate', { error: error.message });
+      return 0;
+    }
+  }
+
+  /**
+   * Get current holder count for a token
+   */
+  private async getHolderCount(tokenAddress: string): Promise<number> {
+    try {
+      const tokenPubkey = new PublicKey(tokenAddress);
+
+      const accounts = await this.connection.getProgramAccounts(
+        TOKEN_PROGRAM_ID,
+        {
+          filters: [
+            { dataSize: 165 },
+            {
+              memcmp: {
+                offset: 0,
+                bytes: tokenPubkey.toBase58()
+              }
+            }
+          ]
+        }
+      );
+
+      // Count accounts with non-zero balance
+      let holderCount = 0;
+      for (const account of accounts) {
+        const balance = account.account.data.readBigUInt64LE(64);
+        if (balance > 0n) {
+          holderCount++;
+        }
+      }
+
+      return holderCount;
+
+    } catch (error: any) {
+      logger.debug('Error getting holder count', { error: error.message });
+      return 0;
+    }
   }
 
   /**
    * Calculate transaction velocity (txs per minute)
    */
-  private async calculateTransactionVelocity(_tokenAddress: string): Promise<number> {
-    // TODO: Implement using Solana RPC to count recent transactions
-    // For now, return 0 (will implement in Phase 2)
-    return 0;
+  private async calculateTransactionVelocity(tokenAddress: string): Promise<number> {
+    try {
+      const tokenPubkey = new PublicKey(tokenAddress);
+
+      // Get transactions from the last 5 minutes
+      const signatures = await this.connection.getSignaturesForAddress(
+        tokenPubkey,
+        { limit: 100 },
+        'confirmed'
+      );
+
+      const fiveMinutesAgo = Date.now() / 1000 - 300;
+      const recentTxs = signatures.filter(s => s.blockTime && s.blockTime > fiveMinutesAgo);
+
+      // Calculate transactions per minute
+      if (recentTxs.length === 0) return 0;
+
+      // Find the time span of recent transactions
+      const timestamps = recentTxs
+        .filter(s => s.blockTime)
+        .map(s => s.blockTime as number);
+
+      if (timestamps.length < 2) {
+        return recentTxs.length / 5; // Assume spread over 5 minutes
+      }
+
+      const oldestTime = Math.min(...timestamps);
+      const newestTime = Math.max(...timestamps);
+      const timeSpanMinutes = (newestTime - oldestTime) / 60;
+
+      if (timeSpanMinutes === 0) return recentTxs.length;
+
+      const velocity = recentTxs.length / timeSpanMinutes;
+
+      logger.debug('Transaction velocity calculated', {
+        token: tokenAddress.slice(0, 8),
+        txCount: recentTxs.length,
+        velocity: velocity.toFixed(2) + '/min'
+      });
+
+      return velocity;
+
+    } catch (error: any) {
+      logger.debug('Error calculating transaction velocity', { error: error.message });
+      return 0;
+    }
   }
 
   /**
    * Count unique buyers in last 15 minutes
    */
-  private async getUniqueBuyersLast15Min(_tokenAddress: string): Promise<number> {
-    // TODO: Implement using Solana RPC
-    // For now, return 0 (will implement in Phase 2)
-    return 0;
+  private async getUniqueBuyersLast15Min(tokenAddress: string): Promise<number> {
+    try {
+      const tokenPubkey = new PublicKey(tokenAddress);
+      const fifteenMinutesAgo = Date.now() / 1000 - 900;
+
+      const signatures = await this.connection.getSignaturesForAddress(
+        tokenPubkey,
+        { limit: 100 },
+        'confirmed'
+      );
+
+      const recentSigs = signatures.filter(s => s.blockTime && s.blockTime > fifteenMinutesAgo);
+      const uniqueBuyers = new Set<string>();
+
+      for (const sig of recentSigs.slice(0, 30)) {
+        try {
+          const tx = await this.connection.getParsedTransaction(
+            sig.signature,
+            { maxSupportedTransactionVersion: 0 }
+          );
+
+          if (!tx || !tx.meta) continue;
+
+          const postBalances = tx.meta.postTokenBalances || [];
+          const preBalances = tx.meta.preTokenBalances || [];
+
+          for (const post of postBalances) {
+            if (post.mint !== tokenAddress) continue;
+
+            const pre = preBalances.find(p => p.accountIndex === post.accountIndex);
+            const preAmount = parseInt(pre?.uiTokenAmount?.amount || '0');
+            const postAmount = parseInt(post.uiTokenAmount?.amount || '0');
+
+            // If balance increased, this is a buyer
+            if (postAmount > preAmount && post.owner) {
+              uniqueBuyers.add(post.owner);
+            }
+          }
+        } catch (txError: any) {
+          continue;
+        }
+      }
+
+      logger.debug('Unique buyers counted', {
+        token: tokenAddress.slice(0, 8),
+        count: uniqueBuyers.size
+      });
+
+      return uniqueBuyers.size;
+
+    } catch (error: any) {
+      logger.debug('Error counting unique buyers', { error: error.message });
+      return 0;
+    }
   }
 
   /**
