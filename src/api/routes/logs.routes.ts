@@ -6,58 +6,143 @@ const router = Router();
 
 /**
  * GET /api/logs
- * Get bot logs with filtering
+ * Get bot logs with filtering - combines bot_logs and audit_log tables
  */
 router.get(
   '/',
   asyncHandler(async (req: any, res: any) => {
     const { level, category, search, limit = 200, offset = 0 } = req.query;
+    const parsedLimit = parseInt(limit as string, 10);
+    const parsedOffset = parseInt(offset as string, 10);
 
-    let query = `
-      SELECT id, level, category, message, data, created_at
+    // Query both bot_logs and audit_log tables and combine them
+    // bot_logs has: id, level, category, message, data, created_at
+    // audit_log has: id, action, details (JSONB), checksum, created_at
+
+    let botLogsQuery = `
+      SELECT
+        id::text,
+        level,
+        category,
+        message,
+        data,
+        created_at,
+        'bot' as source
       FROM bot_logs
     `;
-    const conditions: string[] = [];
-    const values: any[] = [];
-    let paramIndex = 1;
 
+    let auditLogsQuery = `
+      SELECT
+        id::text,
+        'info' as level,
+        'audit' as category,
+        action as message,
+        details as data,
+        created_at,
+        'audit' as source
+      FROM audit_log
+    `;
+
+    const botConditions: string[] = [];
+    const auditConditions: string[] = [];
+    const botValues: any[] = [];
+    const auditValues: any[] = [];
+    let botParamIndex = 1;
+    let auditParamIndex = 1;
+
+    // Apply filters to bot_logs
     if (level && level !== 'all') {
-      conditions.push(`level = $${paramIndex++}`);
-      values.push(level);
+      botConditions.push(`level = $${botParamIndex++}`);
+      botValues.push(level);
     }
 
     if (category && category !== 'all') {
-      conditions.push(`category = $${paramIndex++}`);
-      values.push(category);
+      if (category === 'audit') {
+        // Only show audit logs
+        botConditions.push('1 = 0'); // Exclude bot_logs
+      } else {
+        botConditions.push(`category = $${botParamIndex++}`);
+        botValues.push(category);
+        auditConditions.push('1 = 0'); // Exclude audit_log for non-audit categories
+      }
     }
 
     if (search) {
-      conditions.push(`message ILIKE $${paramIndex++}`);
-      values.push(`%${search}%`);
+      botConditions.push(`message ILIKE $${botParamIndex++}`);
+      botValues.push(`%${search}%`);
+      auditConditions.push(`action ILIKE $${auditParamIndex++}`);
+      auditValues.push(`%${search}%`);
     }
 
-    if (conditions.length > 0) {
-      query += ` WHERE ${conditions.join(' AND ')}`;
+    if (botConditions.length > 0) {
+      botLogsQuery += ` WHERE ${botConditions.join(' AND ')}`;
+    }
+    if (auditConditions.length > 0) {
+      auditLogsQuery += ` WHERE ${auditConditions.join(' AND ')}`;
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
-    values.push(parseInt(limit as string, 10));
-    values.push(parseInt(offset as string, 10));
+    // Combine with UNION ALL and order by created_at
+    const combinedQuery = `
+      SELECT * FROM (
+        (${botLogsQuery})
+        UNION ALL
+        (${auditLogsQuery})
+      ) combined
+      ORDER BY created_at DESC
+      LIMIT $1 OFFSET $2
+    `;
 
-    const result = await getPool().query(query, values);
+    // Execute queries
+    const allValues = [...botValues, ...auditValues, parsedLimit, parsedOffset];
 
-    const logs = result.rows.map((row) => ({
-      id: row.id,
-      level: row.level,
-      category: row.category || 'general',
-      message: row.message,
-      data: row.data || {},
-      timestamp: row.created_at,
-    }));
+    // We need to handle the parameterization differently for UNION
+    // Execute each query separately and combine in JS
+    const [botResult, auditResult] = await Promise.all([
+      getPool().query(
+        botConditions.length > 0
+          ? `${botLogsQuery} ORDER BY created_at DESC`
+          : `${botLogsQuery} ORDER BY created_at DESC`,
+        botValues
+      ),
+      getPool().query(
+        auditConditions.length > 0
+          ? `${auditLogsQuery} ORDER BY created_at DESC`
+          : `${auditLogsQuery} ORDER BY created_at DESC`,
+        auditValues
+      ),
+    ]);
+
+    // Combine and sort
+    const allLogs = [
+      ...botResult.rows.map((row) => ({
+        id: row.id,
+        level: row.level,
+        category: row.category || 'general',
+        message: row.message,
+        data: row.data || {},
+        timestamp: row.created_at,
+        source: 'bot',
+      })),
+      ...auditResult.rows.map((row) => ({
+        id: row.id,
+        level: 'info',
+        category: 'audit',
+        message: row.message, // action
+        data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data || {},
+        timestamp: row.created_at,
+        source: 'audit',
+      })),
+    ];
+
+    // Sort by timestamp descending
+    allLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    // Apply pagination
+    const paginatedLogs = allLogs.slice(parsedOffset, parsedOffset + parsedLimit);
 
     res.json({
       success: true,
-      data: logs,
+      data: paginatedLogs,
     });
   })
 );
@@ -122,7 +207,7 @@ router.delete(
 
 /**
  * GET /api/logs/categories
- * Get all unique log categories
+ * Get all unique log categories (includes 'audit' for audit_log entries)
  */
 router.get(
   '/categories',
@@ -131,9 +216,16 @@ router.get(
       `SELECT DISTINCT category FROM bot_logs WHERE category IS NOT NULL ORDER BY category`
     );
 
+    // Add 'audit' as a category for audit_log entries
+    const categories = result.rows.map((r) => r.category);
+    if (!categories.includes('audit')) {
+      categories.push('audit');
+    }
+    categories.sort();
+
     res.json({
       success: true,
-      data: result.rows.map((r) => r.category),
+      data: categories,
     });
   })
 );
