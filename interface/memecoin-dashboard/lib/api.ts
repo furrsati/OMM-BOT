@@ -14,6 +14,9 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 // This is the actual backend server running the bot
 export const BOT_API_URL = process.env.BOT_API_URL || 'https://omm-bot.onrender.com';
 
+// API Key for authenticated requests to the backend
+export const BOT_API_KEY = process.env.BOT_API_KEY || '';
+
 // Default timeout for API requests (in milliseconds)
 export const API_TIMEOUT = 10000;
 export const CRITICAL_API_TIMEOUT = 60000; // For operations like kill switch
@@ -30,14 +33,22 @@ export async function fetchFromBackend(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+  // Build headers with API key if available
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(fetchOptions.headers as Record<string, string>),
+  };
+
+  // Add API key for authentication
+  if (BOT_API_KEY) {
+    headers['X-API-Key'] = BOT_API_KEY;
+  }
+
   try {
     const response = await fetch(`${BOT_API_URL}${path}`, {
       ...fetchOptions,
       signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...fetchOptions.headers,
-      },
+      headers,
     });
 
     clearTimeout(timeoutId);
