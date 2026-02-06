@@ -422,6 +422,11 @@ export class WalletManager {
    */
   async recordWalletSignal(walletAddress: string, _tokenAddress: string): Promise<void> {
     if (!this.walletStats.has(walletAddress)) {
+      // Memory protection: enforce limits before adding new entries
+      if (this.walletStats.size >= this.MAX_WALLET_STATS) {
+        this.enforceMemoryLimits();
+      }
+
       this.walletStats.set(walletAddress, {
         address: walletAddress,
         signalsGenerated: 0,

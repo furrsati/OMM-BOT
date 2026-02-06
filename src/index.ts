@@ -67,6 +67,10 @@ async function main() {
   let killSwitch: KillSwitch | undefined;
   let apiServer: APIServer | undefined;
 
+  // Track intervals for proper cleanup (memory leak prevention)
+  let cacheCleanupInterval: NodeJS.Timeout | undefined;
+  let memoryMonitorInterval: NodeJS.Timeout | undefined;
+
   try {
     // ============================================================
     // PHASE 8: INITIALIZE ALERT SYSTEM
@@ -159,14 +163,14 @@ async function main() {
     }
 
     // Start periodic cache cleanup (every 5 minutes)
-    setInterval(() => {
+    cacheCleanupInterval = setInterval(() => {
       cleanupExpiredCache().catch(error => {
         logger.error('Cache cleanup error', { error: error.message });
       });
     }, 5 * 60 * 1000); // 5 minutes
 
     // Memory monitoring - check every 30 seconds for 512MB Render instances
-    setInterval(() => {
+    memoryMonitorInterval = setInterval(() => {
       const usage = process.memoryUsage();
       const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
       const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
@@ -724,6 +728,16 @@ async function main() {
     const shutdownHandler = async () => {
       try {
         logger.info('Shutting down...');
+
+        // Clear tracked intervals first to prevent memory leaks
+        if (cacheCleanupInterval) {
+          clearInterval(cacheCleanupInterval);
+          cacheCleanupInterval = undefined;
+        }
+        if (memoryMonitorInterval) {
+          clearInterval(memoryMonitorInterval);
+          memoryMonitorInterval = undefined;
+        }
 
         // Send shutdown alert
         if (alertManager) {

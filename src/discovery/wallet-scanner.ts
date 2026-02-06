@@ -153,10 +153,10 @@ export class WalletScanner {
       }
 
       // Step 2: For each winning token, find early buyers
-      // Process only top 3 tokens to stay within memory limits on small instances
+      // Process only 1 token per cycle to stay within RPC rate limits
       let totalEarlyBuyers = 0;
-      const tokensToProcess = winningTokens.slice(0, 3);
-      logStep(2, 5, `Processing ${tokensToProcess.length} winning tokens to find early buyers...`);
+      const tokensToProcess = winningTokens.slice(0, 1);
+      logStep(2, 5, `Processing ${tokensToProcess.length} winning token to find early buyers...`);
 
       for (let i = 0; i < tokensToProcess.length; i++) {
         const token = tokensToProcess[i];
@@ -206,7 +206,7 @@ export class WalletScanner {
         });
 
         // Add delay between tokens to give RPC a break
-        await this.sleep(2000);
+        await this.sleep(5000);
       }
 
       logThinking('SCANNER', `Scan cycle complete: processed ${tokensToProcess.length} tokens, found ${totalEarlyBuyers} early buyers`, {
@@ -573,11 +573,11 @@ export class WalletScanner {
       const launchTime = token.launchTime;
       const fiveMinutesAfterLaunch = launchTime + 300;
 
-      // Get signatures for the pool address (reduced to conserve RPC calls)
+      // Get signatures for the pool address (minimal to conserve RPC calls)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           poolPubkey,
-          { limit: 200 },
+          { limit: 50 },
           'confirmed'
         ),
         2 // Higher priority for pool queries
@@ -585,11 +585,11 @@ export class WalletScanner {
 
       logger.debug(`Pool ${token.pairAddress.slice(0, 8)}... has ${signatures.length} signatures`);
 
-      // Filter to first 5 minutes after launch (reduced limit to conserve memory)
+      // Filter to first 5 minutes after launch (minimal to conserve RPC)
       const relevantSigs = signatures.filter(sig => {
         if (!sig.blockTime) return false;
         return sig.blockTime >= launchTime && sig.blockTime <= fiveMinutesAfterLaunch;
-      }).slice(0, 30); // Check up to 30 early transactions (reduced from 100)
+      }).slice(0, 10); // Check only 10 early transactions
 
       logger.debug(`Found ${relevantSigs.length} transactions in first 5 minutes`);
 
@@ -741,8 +741,8 @@ export class WalletScanner {
 
       logger.debug(`Found ${tokenAccounts.length} token holders via Helius`);
 
-      // For each holder, check when they first acquired the token (reduced to conserve RPC)
-      for (const account of tokenAccounts.slice(0, 15)) {
+      // For each holder, check when they first acquired the token (minimal to conserve RPC)
+      for (const account of tokenAccounts.slice(0, 5)) {
         const ownerAddress = account.owner;
 
         // Get the owner's transaction history for this token
@@ -820,8 +820,8 @@ export class WalletScanner {
         1
       );
 
-      // Check each large holder for early entry (reduced to conserve RPC)
-      for (const account of largestAccounts.value.slice(0, 10)) {
+      // Check each large holder for early entry (minimal to conserve RPC)
+      for (const account of largestAccounts.value.slice(0, 5)) {
         try {
           // Get the token account info to find the owner
           const accountInfo = await rateLimitedRPC(
@@ -943,11 +943,11 @@ export class WalletScanner {
     try {
       const tokenPubkey = new PublicKey(tokenAddress);
 
-      // Get token account creation signature (increased for better deployer detection)
+      // Get token account creation signature (minimal to conserve RPC)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           tokenPubkey,
-          { limit: 300 },
+          { limit: 50 },
           'confirmed'
         ),
         1 // Medium priority
@@ -992,8 +992,8 @@ export class WalletScanner {
 
     connected.add(rootWallet);
 
-    // Cap total wallets to check - increased to 50 to properly traverse 2 hops
-    const maxWalletsToCheck = 50;
+    // Cap total wallets to check - reduced to 15 to conserve RPC calls
+    const maxWalletsToCheck = 15;
     let walletsChecked = 0;
 
     while (queue.length > 0 && walletsChecked < maxWalletsToCheck) {
@@ -1031,18 +1031,18 @@ export class WalletScanner {
       const pubkey = new PublicKey(walletAddress);
       const recipients = new Set<string>();
 
-      // Get recent signatures (increased for better connection detection)
+      // Get recent signatures (minimal for connection detection)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           pubkey,
-          { limit: 100 },
+          { limit: 20 },
           'confirmed'
         ),
         0 // Lower priority
       );
 
-      // Check first 25 transactions for connection detection
-      for (const sig of signatures.slice(0, 25)) {
+      // Check first 5 transactions for connection detection
+      for (const sig of signatures.slice(0, 5)) {
         try {
           const tx = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
@@ -1115,18 +1115,18 @@ export class WalletScanner {
     try {
       const pubkey = new PublicKey(walletAddress);
 
-      // Get recent transaction history
+      // Get recent transaction history (minimal)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           pubkey,
-          { limit: 30 },
+          { limit: 15 },
           'confirmed'
         ),
         0 // Lower priority
       );
 
       // Need minimum data to make bot determination
-      if (signatures.length < 10) return false;
+      if (signatures.length < 5) return false;
 
       let quickSellCount = 0;
       let totalTrades = 0;
@@ -1137,8 +1137,8 @@ export class WalletScanner {
       const tokenBuys: Map<string, number> = new Map();
       const slotCounts: Map<number, number> = new Map();
 
-      // Analyze transactions for bot patterns
-      for (const sig of signatures.slice(0, 15)) {
+      // Analyze transactions for bot patterns (minimal)
+      for (const sig of signatures.slice(0, 5)) {
         try {
           const tx = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
@@ -1503,9 +1503,9 @@ export class WalletScanner {
       // Get wallet's token accounts to find what tokens they hold/held
       const pubkey = new PublicKey(walletAddress);
 
-      // Get recent transaction signatures
+      // Get recent transaction signatures (minimal)
       const signatures = await rateLimitedRPC(
-        () => this.connection.getSignaturesForAddress(pubkey, { limit: 100 }, 'confirmed'),
+        () => this.connection.getSignaturesForAddress(pubkey, { limit: 30 }, 'confirmed'),
         1
       );
 
@@ -1517,8 +1517,8 @@ export class WalletScanner {
       // Track unique tokens found
       const tokensFound = new Map<string, { buyTime: number; price: number; symbol: string }>();
 
-      // Parse recent transactions to find token swaps
-      for (const sig of signatures.slice(0, 30)) {
+      // Parse recent transactions to find token swaps (minimal)
+      for (const sig of signatures.slice(0, 10)) {
         try {
           const tx = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 }),

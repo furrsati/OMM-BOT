@@ -141,8 +141,8 @@ export class RateLimiter {
         }
       }
 
-      // Small delay between requests to smooth out bursts
-      await this.sleep(50);
+      // Delay between requests to smooth out bursts and avoid rate limits
+      await this.sleep(200);
     }
 
     this.processing = false;
@@ -198,10 +198,10 @@ let globalRateLimiter: RateLimiter | null = null;
 
 export function getRPCRateLimiter(): RateLimiter {
   if (!globalRateLimiter) {
-    // Conservative limits for Helius free tier
-    // Adjust these based on your plan
-    const maxRPS = parseInt(process.env.RPC_MAX_REQUESTS_PER_SECOND || '8', 10);
-    const maxBurst = parseInt(process.env.RPC_MAX_BURST || '15', 10);
+    // Very conservative limits to avoid 429 errors
+    // Reduced from 8/15 to 3/5 for stability
+    const maxRPS = parseInt(process.env.RPC_MAX_REQUESTS_PER_SECOND || '3', 10);
+    const maxBurst = parseInt(process.env.RPC_MAX_BURST || '5', 10);
 
     globalRateLimiter = new RateLimiter({
       name: 'RPC',

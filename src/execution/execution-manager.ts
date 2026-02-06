@@ -45,9 +45,13 @@ export class ExecutionManager {
   private sellExecutor: SellExecutor;
   private entryDecision: EntryDecisionEngine;
 
-  // Queues
+  // Queues with memory limits for 512MB Render instances
   private pendingBuys: Map<string, PendingBuyOrder> = new Map();
   private pendingSells: Map<string, PendingSellOrder> = new Map();
+
+  // Memory limits to prevent unbounded queue growth
+  private readonly MAX_PENDING_BUYS = 50;
+  private readonly MAX_PENDING_SELLS = 50;
 
   // Execution tracking
   private executingBuys: Set<string> = new Set();
@@ -107,6 +111,16 @@ export class ExecutionManager {
         return;
       }
 
+      // Memory protection: reject if queue is full
+      if (this.pendingBuys.size >= this.MAX_PENDING_BUYS) {
+        logger.warn('Buy queue full - rejecting order to prevent memory issues', {
+          token: tokenAddress.slice(0, 8),
+          queueSize: this.pendingBuys.size,
+          maxSize: this.MAX_PENDING_BUYS
+        });
+        return;
+      }
+
       // Add to queue
       this.pendingBuys.set(tokenAddress, {
         decision,
@@ -140,6 +154,17 @@ export class ExecutionManager {
       if (this.pendingSells.has(tokenAddress) || this.executingSells.has(tokenAddress)) {
         logger.warn('Sell order already queued or executing', {
           token: tokenAddress.slice(0, 8)
+        });
+        return;
+      }
+
+      // Memory protection: reject if queue is full (but allow emergency sells)
+      if (this.pendingSells.size >= this.MAX_PENDING_SELLS && order.urgency !== 'emergency') {
+        logger.warn('Sell queue full - rejecting non-emergency order to prevent memory issues', {
+          token: tokenAddress.slice(0, 8),
+          queueSize: this.pendingSells.size,
+          maxSize: this.MAX_PENDING_SELLS,
+          urgency: order.urgency
         });
         return;
       }

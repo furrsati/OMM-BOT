@@ -36,6 +36,9 @@ export class TelegramClient {
   private refillRate = 30; // tokens per second
   private lastRefill = Date.now();
 
+  // Track interval for cleanup (memory leak prevention)
+  private refillInterval: NodeJS.Timeout | null = null;
+
   // Stats
   private stats: TelegramStats = {
     sent: 0,
@@ -78,8 +81,8 @@ export class TelegramClient {
 
       this.enabled = true;
 
-      // Start token refill interval
-      setInterval(() => this.refillTokens(), 100); // Refill every 100ms
+      // Start token refill interval (tracked for cleanup)
+      this.refillInterval = setInterval(() => this.refillTokens(), 100); // Refill every 100ms
 
     } catch (error: any) {
       logger.error('Failed to initialize Telegram client', { error: error.message });
@@ -184,6 +187,18 @@ export class TelegramClient {
    */
   getChatId(): string | null {
     return this.chatId;
+  }
+
+  /**
+   * Stop the client and cleanup resources
+   */
+  stop(): void {
+    if (this.refillInterval) {
+      clearInterval(this.refillInterval);
+      this.refillInterval = null;
+    }
+    this.enabled = false;
+    logger.info('Telegram client stopped');
   }
 
   /**

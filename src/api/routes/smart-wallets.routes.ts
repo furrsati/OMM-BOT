@@ -42,7 +42,8 @@ router.get(
         created_at
       FROM smart_wallets
       WHERE is_active = true
-      ORDER BY tier ASC, score DESC`
+      ORDER BY tier ASC, score DESC
+      LIMIT 100`
     );
 
     const wallets = result.rows.map((row) => ({

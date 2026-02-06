@@ -38,6 +38,9 @@ export class DiscordClient {
   private refillRate = 5; // tokens per second
   private lastRefill = Date.now();
 
+  // Track interval for cleanup (memory leak prevention)
+  private refillInterval: NodeJS.Timeout | null = null;
+
   // Stats
   private stats: DiscordStats = {
     sent: 0,
@@ -84,8 +87,8 @@ export class DiscordClient {
       logger.info('✅ Discord client initialized');
       this.enabled = true;
 
-      // Start token refill interval
-      setInterval(() => this.refillTokens(), 100); // Refill every 100ms
+      // Start token refill interval (tracked for cleanup)
+      this.refillInterval = setInterval(() => this.refillTokens(), 100); // Refill every 100ms
 
     } catch (error: any) {
       logger.error('Failed to initialize Discord client', { error: error.message });
@@ -218,6 +221,18 @@ export class DiscordClient {
    */
   getStats(): DiscordStats {
     return { ...this.stats };
+  }
+
+  /**
+   * Stop the client and cleanup resources
+   */
+  stop(): void {
+    if (this.refillInterval) {
+      clearInterval(this.refillInterval);
+      this.refillInterval = null;
+    }
+    this.enabled = false;
+    logger.info('Discord client stopped');
   }
 
   /**
