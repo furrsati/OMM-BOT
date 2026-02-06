@@ -93,23 +93,27 @@ export class WalletManager {
       logger.info('Checking for declining performance...');
       await this.demoteDecliningWallets();
 
-      // Step 2: Re-score ALL remaining wallets
+      // Step 2: Check for wallet rotation (per CLAUDE.md: rotate every 2-4 weeks)
+      logger.info('Checking wallet rotation schedule...');
+      await this.checkWalletRotation();
+
+      // Step 3: Re-score ALL remaining wallets
       logger.info('Re-scoring all wallets...');
       const rescored = await this.scorer.scoreAllWallets();
 
-      // Step 3: Detect and remove burned wallets
+      // Step 4: Detect and remove burned wallets
       logger.info('Detecting crowded/burned wallets...');
       await this.detectBurnedWallets();
 
-      // Step 4: Update watchlist based on new scores
+      // Step 5: Update watchlist based on new scores
       logger.info('Updating watchlist...');
       await this.updateWatchlist(rescored);
 
-      // Step 5: Clean up inactive wallets
+      // Step 6: Clean up inactive wallets
       logger.info('Removing inactive wallets...');
       await this.removeInactiveWallets();
 
-      // Step 6: Keep only top performers (max 100 wallets)
+      // Step 7: Keep only top performers (max 100 wallets)
       logger.info('Pruning to top performers...');
       await this.pruneToTopPerformers();
 
@@ -230,6 +234,81 @@ export class WalletManager {
 
     } catch (error: any) {
       logger.error('Error demoting declining wallets', { error: error.message });
+    }
+  }
+
+  /**
+   * Check for wallet rotation per CLAUDE.md Category 14:
+   * "WALLET ROTATION: Every 2–4 weeks, find new alpha wallets, phase out crowded ones"
+   *
+   * Wallets older than 4 weeks are flagged for review. This doesn't auto-remove them
+   * but alerts that fresh alpha discovery should be prioritized.
+   */
+  private async checkWalletRotation(): Promise<void> {
+    try {
+      // Find wallets that have been in the watchlist for more than 4 weeks
+      const staleWallets = await query<{ address: string; tier: number; age_days: number }>(
+        `SELECT address, tier,
+                EXTRACT(DAY FROM NOW() - created_at)::INTEGER as age_days
+         FROM smart_wallets
+         WHERE is_active = true
+         AND created_at < NOW() - INTERVAL '28 days'
+         ORDER BY created_at ASC`
+      );
+
+      if (staleWallets.rows.length === 0) {
+        logger.debug('No wallets due for rotation');
+        return;
+      }
+
+      logger.warn(`⚠️ ROTATION ALERT: ${staleWallets.rows.length} wallets are older than 4 weeks`, {
+        count: staleWallets.rows.length,
+        wallets: staleWallets.rows.slice(0, 10).map(w => ({
+          address: w.address.slice(0, 8) + '...',
+          tier: w.tier,
+          ageDays: w.age_days
+        }))
+      });
+
+      // For wallets older than 6 weeks with poor recent performance, demote to Tier 3
+      const veryStaleResult = await query<{ address: string }>(
+        `SELECT sw.address
+         FROM smart_wallets sw
+         WHERE sw.is_active = true
+         AND sw.tier < 3
+         AND sw.created_at < NOW() - INTERVAL '42 days'
+         AND NOT EXISTS (
+           SELECT 1 FROM wallet_discoveries wd
+           WHERE wd.wallet_address = sw.address
+           AND wd.entry_time > NOW() - INTERVAL '14 days'
+           AND wd.is_winner = true
+         )`
+      );
+
+      if (veryStaleResult.rows.length > 0) {
+        for (const wallet of veryStaleResult.rows) {
+          await query(
+            `UPDATE smart_wallets
+             SET tier = 3, notes = 'Demoted: Stale wallet (>6 weeks, no recent wins)', updated_at = NOW()
+             WHERE address = $1`,
+            [wallet.address]
+          );
+
+          // Update in-memory watchlist
+          const existing = this.watchlist.get(wallet.address);
+          if (existing) {
+            existing.tier = 3;
+            this.watchlist.set(wallet.address, existing);
+          }
+
+          logger.info(`Demoted stale wallet ${wallet.address.slice(0, 8)}... to Tier 3 (>6 weeks old, no recent wins)`);
+        }
+
+        logger.info(`✅ Demoted ${veryStaleResult.rows.length} very stale wallets to Tier 3`);
+      }
+
+    } catch (error: any) {
+      logger.error('Error checking wallet rotation', { error: error.message });
     }
   }
 

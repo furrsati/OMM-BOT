@@ -17,6 +17,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { getMint, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { logger } from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
+import { rateLimitedRPC } from '../utils/rate-limiter';
 
 export interface ContractAnalysis {
   tokenAddress: string;
@@ -78,7 +79,10 @@ export class ContractAnalyzer {
   private async isPumpFunToken(tokenAddress: string): Promise<boolean> {
     try {
       const tokenPubkey = new PublicKey(tokenAddress);
-      const accountInfo = await this.connection.getAccountInfo(tokenPubkey);
+      const accountInfo = await rateLimitedRPC(
+        () => this.connection.getAccountInfo(tokenPubkey),
+        5 // medium priority
+      );
 
       if (!accountInfo) return false;
 
@@ -158,7 +162,10 @@ export class ContractAnalyzer {
       }
 
       // Step 1: Get mint account info (standard SPL token)
-      const mintInfo = await getMint(this.connection, tokenPubkey);
+      const mintInfo = await rateLimitedRPC(
+        () => getMint(this.connection, tokenPubkey),
+        6 // higher priority for main analysis
+      );
 
       // Step 2: Check authorities
       const hasMintAuthority = mintInfo.mintAuthority !== null;
@@ -248,23 +255,29 @@ export class ContractAnalyzer {
   }> {
     try {
       const tokenPubkey = new PublicKey(tokenAddress);
-      const mintInfo = await getMint(this.connection, tokenPubkey);
+      const mintInfo = await rateLimitedRPC(
+        () => getMint(this.connection, tokenPubkey),
+        4
+      );
       const totalSupply = Number(mintInfo.supply);
 
       // Get all token accounts for this mint
-      const accounts = await this.connection.getProgramAccounts(
-        TOKEN_PROGRAM_ID,
-        {
-          filters: [
-            { dataSize: 165 }, // Token account size
-            {
-              memcmp: {
-                offset: 0,
-                bytes: tokenPubkey.toBase58()
+      const accounts = await rateLimitedRPC(
+        () => this.connection.getProgramAccounts(
+          TOKEN_PROGRAM_ID,
+          {
+            filters: [
+              { dataSize: 165 }, // Token account size
+              {
+                memcmp: {
+                  offset: 0,
+                  bytes: tokenPubkey.toBase58()
+                }
               }
-            }
-          ]
-        }
+            ]
+          }
+        ),
+        3 // lower priority - background analysis
       );
 
       // Parse balances
@@ -478,13 +491,16 @@ export class ContractAnalyzer {
       void new PublicKey(tokenAddress);
 
       // Get accounts associated with the Raydium AMM program that involve this token
-      const accounts = await this.connection.getProgramAccounts(
-        this.RAYDIUM_AMM_PROGRAM,
-        {
-          filters: [
-            { dataSize: 752 }, // Raydium AMM pool account size
-          ]
-        }
+      const accounts = await rateLimitedRPC(
+        () => this.connection.getProgramAccounts(
+          this.RAYDIUM_AMM_PROGRAM,
+          {
+            filters: [
+              { dataSize: 752 }, // Raydium AMM pool account size
+            ]
+          }
+        ),
+        2 // low priority
       );
 
       // Look for pools that contain our token
@@ -529,7 +545,10 @@ export class ContractAnalyzer {
   }> {
     try {
       const lpMintPubkey = new PublicKey(lpMint);
-      const mintInfo = await getMint(this.connection, lpMintPubkey);
+      const mintInfo = await rateLimitedRPC(
+        () => getMint(this.connection, lpMintPubkey),
+        3
+      );
       const totalSupply = Number(mintInfo.supply);
 
       if (totalSupply === 0) {
@@ -537,19 +556,22 @@ export class ContractAnalyzer {
       }
 
       // Get all LP token holders
-      const accounts = await this.connection.getProgramAccounts(
-        TOKEN_PROGRAM_ID,
-        {
-          filters: [
-            { dataSize: 165 },
-            {
-              memcmp: {
-                offset: 0,
-                bytes: lpMintPubkey.toBase58()
+      const accounts = await rateLimitedRPC(
+        () => this.connection.getProgramAccounts(
+          TOKEN_PROGRAM_ID,
+          {
+            filters: [
+              { dataSize: 165 },
+              {
+                memcmp: {
+                  offset: 0,
+                  bytes: lpMintPubkey.toBase58()
+                }
               }
-            }
-          ]
-        }
+            ]
+          }
+        ),
+        2
       );
 
       const holders: string[] = [];
@@ -634,7 +656,10 @@ export class ContractAnalyzer {
     try {
       // Check if the token account is owned by an upgradeable program
       const tokenPubkey = new PublicKey(tokenAddress);
-      const accountInfo = await this.connection.getAccountInfo(tokenPubkey);
+      const accountInfo = await rateLimitedRPC(
+        () => this.connection.getAccountInfo(tokenPubkey),
+        3
+      );
 
       if (!accountInfo) {
         return false;
@@ -659,9 +684,9 @@ export class ContractAnalyzer {
     try {
       // Get recent transaction history for analysis
       const tokenPubkey = new PublicKey(tokenAddress);
-      await this.connection.getSignaturesForAddress(
-        tokenPubkey,
-        { limit: 100 }
+      await rateLimitedRPC(
+        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 100 }),
+        2
       );
 
       // Look for suspicious mint transactions after initial creation
@@ -779,7 +804,10 @@ export class ContractAnalyzer {
 
       // Standard SPL token check
       const tokenPubkey = new PublicKey(tokenAddress);
-      const mintInfo = await getMint(this.connection, tokenPubkey);
+      const mintInfo = await rateLimitedRPC(
+        () => getMint(this.connection, tokenPubkey),
+        6
+      );
 
       // Hard reject: Has mint authority
       if (mintInfo.mintAuthority !== null) {

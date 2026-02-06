@@ -14,10 +14,14 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { getMint, getAccount, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { logger } from '../utils/logger';
+import { rateLimitedRPC } from '../utils/rate-limiter';
 import { PositionData } from './position-tracker';
 import { WalletManager } from '../discovery/wallet-manager';
 import { PriceFeed } from '../market/price-feed';
 import { query } from '../db/postgres';
+
+// Pump.fun bonding curve program ID
+const PUMP_FUN_PROGRAM = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
 
 export interface DangerSignal {
   isDangerous: boolean;
@@ -73,6 +77,24 @@ export class DangerMonitor {
   }
 
   /**
+   * Check if token is a pump.fun bonding curve token
+   * These tokens are owned by the pump.fun program, not the SPL Token Program
+   */
+  private async isPumpFunToken(tokenAddress: string): Promise<boolean> {
+    try {
+      const tokenPubkey = new PublicKey(tokenAddress);
+      const accountInfo = await rateLimitedRPC(
+        () => this.connection.getAccountInfo(tokenPubkey),
+        5 // medium priority
+      );
+      if (!accountInfo) return false;
+      return accountInfo.owner.equals(PUMP_FUN_PROGRAM);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Start monitoring a position for danger signals
    */
   async startMonitoring(position: PositionData, initialLiquidity: number, initialHolderCount: number): Promise<void> {
@@ -92,21 +114,40 @@ export class DangerMonitor {
     // Capture contract state snapshot for change detection
     try {
       const mintPubkey = new PublicKey(position.tokenAddress);
-      const mintInfo = await getMint(this.connection, mintPubkey);
 
-      monitoringData.contractSnapshot = {
-        mintAuthority: mintInfo.mintAuthority?.toBase58() || null,
-        freezeAuthority: mintInfo.freezeAuthority?.toBase58() || null,
-        supply: mintInfo.supply,
-        decimals: mintInfo.decimals
-      };
+      // Check if pump.fun token - use safe defaults if so
+      if (await this.isPumpFunToken(position.tokenAddress)) {
+        // Pump.fun bonding curve tokens have no mint/freeze authority by design
+        monitoringData.contractSnapshot = {
+          mintAuthority: null,
+          freezeAuthority: null,
+          supply: BigInt(0),
+          decimals: 6
+        };
+        logger.debug('Pump.fun token - using safe defaults for contract snapshot', {
+          token: position.tokenAddress.slice(0, 8)
+        });
+      } else {
+        // Standard SPL token
+        const mintInfo = await rateLimitedRPC(
+          () => getMint(this.connection, mintPubkey),
+          6 // higher priority for monitoring
+        );
 
-      logger.debug('Captured contract snapshot', {
-        token: position.tokenAddress.slice(0, 8),
-        mintAuthority: monitoringData.contractSnapshot.mintAuthority ? 'present' : 'none',
-        freezeAuthority: monitoringData.contractSnapshot.freezeAuthority ? 'present' : 'none',
-        supply: mintInfo.supply.toString()
-      });
+        monitoringData.contractSnapshot = {
+          mintAuthority: mintInfo.mintAuthority?.toBase58() || null,
+          freezeAuthority: mintInfo.freezeAuthority?.toBase58() || null,
+          supply: mintInfo.supply,
+          decimals: mintInfo.decimals
+        };
+
+        logger.debug('Captured contract snapshot', {
+          token: position.tokenAddress.slice(0, 8),
+          mintAuthority: monitoringData.contractSnapshot.mintAuthority ? 'present' : 'none',
+          freezeAuthority: monitoringData.contractSnapshot.freezeAuthority ? 'present' : 'none',
+          supply: mintInfo.supply.toString()
+        });
+      }
     } catch (error: any) {
       logger.warn('Could not capture contract snapshot', {
         token: position.tokenAddress.slice(0, 8),
@@ -249,8 +290,16 @@ export class DangerMonitor {
     }
 
     try {
+      // Skip contract change monitoring for pump.fun tokens (immutable bonding curve)
+      if (await this.isPumpFunToken(position.tokenAddress)) {
+        return { isDangerous: false, severity: 'warning', recommendation: 'monitor' };
+      }
+
       const mintPubkey = new PublicKey(position.tokenAddress);
-      const currentMintInfo = await getMint(this.connection, mintPubkey);
+      const currentMintInfo = await rateLimitedRPC(
+        () => getMint(this.connection, mintPubkey),
+        6 // higher priority for danger monitoring
+      );
 
       const snapshot = data.contractSnapshot;
 
@@ -446,19 +495,22 @@ export class DangerMonitor {
       const mintPubkey = new PublicKey(tokenAddress);
 
       // Get all token accounts for this mint
-      const tokenAccounts = await this.connection.getProgramAccounts(
-        TOKEN_PROGRAM_ID,
-        {
-          filters: [
-            { dataSize: 165 }, // Token account size
-            {
-              memcmp: {
-                offset: 0, // Mint is at offset 0
-                bytes: mintPubkey.toBase58()
+      const tokenAccounts = await rateLimitedRPC(
+        () => this.connection.getProgramAccounts(
+          TOKEN_PROGRAM_ID,
+          {
+            filters: [
+              { dataSize: 165 }, // Token account size
+              {
+                memcmp: {
+                  offset: 0, // Mint is at offset 0
+                  bytes: mintPubkey.toBase58()
+                }
               }
-            }
-          ]
-        }
+            ]
+          }
+        ),
+        5 // medium-high priority - danger monitoring is important
       );
 
       // Count accounts with non-zero balance
@@ -573,8 +625,16 @@ export class DangerMonitor {
       }
 
       // Get total supply to calculate percentage
+      // Skip precise dev sell % calculation for pump.fun tokens (can't get supply from bonding curve)
+      if (await this.isPumpFunToken(position.tokenAddress)) {
+        return { isDangerous: false, severity: 'warning', recommendation: 'monitor' };
+      }
+
       const mintPubkey = new PublicKey(position.tokenAddress);
-      const mintInfo = await getMint(this.connection, mintPubkey);
+      const mintInfo = await rateLimitedRPC(
+        () => getMint(this.connection, mintPubkey),
+        6
+      );
       const totalSupply = Number(mintInfo.supply);
 
       const sellPercentage = balanceDecrease / totalSupply;
@@ -621,12 +681,17 @@ export class DangerMonitor {
    */
   private async checkWhaleDumps(position: PositionData): Promise<DangerSignal> {
     try {
+      // Skip whale dump percentage calculation for pump.fun tokens (can't get supply)
+      if (await this.isPumpFunToken(position.tokenAddress)) {
+        return { isDangerous: false, severity: 'warning', recommendation: 'monitor' };
+      }
+
       const mintPubkey = new PublicKey(position.tokenAddress);
 
       // Get recent signatures for the token mint
-      const signatures = await this.connection.getSignaturesForAddress(
-        mintPubkey,
-        { limit: 20 }
+      const signatures = await rateLimitedRPC(
+        () => this.connection.getSignaturesForAddress(mintPubkey, { limit: 20 }),
+        5
       );
 
       if (signatures.length === 0) {
@@ -634,7 +699,10 @@ export class DangerMonitor {
       }
 
       // Get token supply for percentage calculation
-      const mintInfo = await getMint(this.connection, mintPubkey);
+      const mintInfo = await rateLimitedRPC(
+        () => getMint(this.connection, mintPubkey),
+        6
+      );
       const totalSupply = Number(mintInfo.supply);
 
       // Check recent transactions for large sells
@@ -645,9 +713,12 @@ export class DangerMonitor {
         }
 
         try {
-          const tx = await this.connection.getParsedTransaction(sig.signature, {
-            maxSupportedTransactionVersion: 0
-          });
+          const tx = await rateLimitedRPC(
+            () => this.connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0
+            }),
+            4
+          );
 
           if (!tx?.meta?.postTokenBalances || !tx?.meta?.preTokenBalances) {
             continue;
@@ -712,9 +783,9 @@ export class DangerMonitor {
       const mintPubkey = new PublicKey(position.tokenAddress);
 
       // Get recent signatures
-      const signatures = await this.connection.getSignaturesForAddress(
-        mintPubkey,
-        { limit: 30 }
+      const signatures = await rateLimitedRPC(
+        () => this.connection.getSignaturesForAddress(mintPubkey, { limit: 30 }),
+        5
       );
 
       // Filter to last minute only
@@ -733,9 +804,12 @@ export class DangerMonitor {
       // Analyze recent transactions
       for (const sig of recentSigs.slice(0, 15)) {
         try {
-          const tx = await this.connection.getParsedTransaction(sig.signature, {
-            maxSupportedTransactionVersion: 0
-          });
+          const tx = await rateLimitedRPC(
+            () => this.connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0
+            }),
+            3
+          );
 
           if (!tx?.meta?.postTokenBalances || !tx?.meta?.preTokenBalances) {
             continue;

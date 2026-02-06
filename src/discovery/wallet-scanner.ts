@@ -387,9 +387,8 @@ export class WalletScanner {
         }
       }
 
-      // RELAXED: Accept tokens with 3x-100x multipliers (was 5-50x)
-      // This catches more potential winners
-      if (estimatedMultiplier < 3 || estimatedMultiplier > 100) {
+      // Per CLAUDE.md: "Scan the Solana blockchain for tokens that achieved 5×–50× gains"
+      if (estimatedMultiplier < 5 || estimatedMultiplier > 50) {
         return null;
       }
 
@@ -856,13 +855,14 @@ export class WalletScanner {
 
 
   /**
-   * Filter out wallets connected to token deployer (1-hop analysis only)
-   * RELAXED: Now only checks direct deployer connections (1 hop instead of 2)
-   * to avoid false positives from common funding sources
+   * Filter out wallets connected to token deployer (2-hop analysis)
+   * Per CLAUDE.md: "Cross-reference every early wallet against the token deployer
+   * using on-chain graph analysis (2 hops deep minimum)"
    *
    * Removes wallets that:
    * - Are the deployer
-   * - Received SOL/tokens DIRECTLY from deployer
+   * - Received SOL/tokens from deployer (1 hop)
+   * - Received SOL/tokens from deployer-funded wallets (2 hops)
    */
   private async filterDeployerConnectedWallets(
     buyers: EarlyBuyer[],
@@ -884,8 +884,8 @@ export class WalletScanner {
         return buyers;
       }
 
-      // RELAXED: Only check 1 hop (direct connection) instead of 2
-      const connectionGraph = await this.buildConnectionGraph(deployer, 1);
+      // Check 2 hops deep per rulebook requirements
+      const connectionGraph = await this.buildConnectionGraph(deployer, 2);
 
       // Filter out directly connected wallets AND the deployer
       const cleanBuyers = buyers.filter(buyer => {
@@ -958,6 +958,7 @@ export class WalletScanner {
   /**
    * Build connection graph from a wallet (N hops deep)
    * Rate-limited and capped to avoid excessive RPC calls
+   * Per CLAUDE.md: Must check 2 hops deep minimum for deployer connections
    */
   private async buildConnectionGraph(
     rootWallet: string,
@@ -970,8 +971,8 @@ export class WalletScanner {
 
     connected.add(rootWallet);
 
-    // Cap total wallets to check to avoid runaway RPC calls
-    const maxWalletsToCheck = 20;
+    // Cap total wallets to check - increased to 50 to properly traverse 2 hops
+    const maxWalletsToCheck = 50;
     let walletsChecked = 0;
 
     while (queue.length > 0 && walletsChecked < maxWalletsToCheck) {
@@ -1086,8 +1087,8 @@ export class WalletScanner {
 
   /**
    * Check if wallet exhibits bot behavior
-   * RELAXED: Less aggressive detection to avoid false positives
-   * Only flags OBVIOUS bots - errs on side of keeping wallets
+   * Per CLAUDE.md: Remove wallets that exhibit MEV behavior patterns:
+   * sandwich attacks, frontrunning, back-running, or atomic arbitrage
    */
   private async isBotWallet(walletAddress: string): Promise<boolean> {
     try {
@@ -1103,19 +1104,20 @@ export class WalletScanner {
         0 // Lower priority
       );
 
-      // RELAXED: Need more data to make bot determination
-      if (signatures.length < 15) return false;
+      // Need minimum data to make bot determination
+      if (signatures.length < 10) return false;
 
       let quickSellCount = 0;
       let totalTrades = 0;
       let atomicArbPatterns = 0;
+      let sameSlotTxCount = 0;
 
       // Track buy/sell pairs for quick sell detection
       const tokenBuys: Map<string, number> = new Map();
       const slotCounts: Map<number, number> = new Map();
 
-      // Analyze fewer transactions to reduce RPC load
-      for (const sig of signatures.slice(0, 10)) {
+      // Analyze transactions for bot patterns
+      for (const sig of signatures.slice(0, 15)) {
         try {
           const tx = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
@@ -1150,7 +1152,7 @@ export class WalletScanner {
           ];
 
           const dexInteractions = dexPrograms.filter(p => programIds.has(p)).length;
-          if (dexInteractions >= 3) { // RAISED threshold from 2 to 3
+          if (dexInteractions >= 2) {
             atomicArbPatterns++;
           }
 
@@ -1172,8 +1174,8 @@ export class WalletScanner {
               tokenBuys.set(post.mint, sig.blockTime || Date.now() / 1000);
             } else if (preAmount > postAmount && sig.blockTime) {
               const buyTime = tokenBuys.get(post.mint);
-              // RELAXED: Only count as quick sell if < 2 minutes (was 5)
-              if (buyTime && (sig.blockTime - buyTime) < 120) {
+              // Count as quick sell if < 5 minutes (per rulebook: "sell more than 80% within 5 minutes")
+              if (buyTime && (sig.blockTime - buyTime) < 300) {
                 quickSellCount++;
               }
             }
@@ -1185,23 +1187,32 @@ export class WalletScanner {
         }
       }
 
-      // RELAXED thresholds - only flag OBVIOUS bots
+      // Count same-slot transactions (indicator of sandwich/frontrun behavior)
+      for (const count of slotCounts.values()) {
+        if (count >= 2) {
+          sameSlotTxCount += count - 1;
+        }
+      }
 
-      // If more than 90% are quick sells (was 80%), likely a dump bot
+      // Per CLAUDE.md: "Remove wallets that sell more than 80% of their position within 5 minutes"
       const quickSellRate = quickSellCount / Math.max(totalTrades, 1);
-      if (quickSellRate > 0.9 && quickSellCount >= 5) {
+      if (quickSellRate > 0.8 && quickSellCount >= 4) {
         logger.debug(`Wallet ${walletAddress.slice(0, 8)}... flagged as dump bot (${(quickSellRate * 100).toFixed(0)}% quick sells)`);
         return true;
       }
 
-      // If atomic arbitrage detected very frequently (raised from 2 to 4)
-      if (atomicArbPatterns >= 4) {
+      // Atomic arbitrage detection - 3+ patterns indicates MEV bot
+      if (atomicArbPatterns >= 3) {
         logger.debug(`Wallet ${walletAddress.slice(0, 8)}... flagged as atomic arb bot (${atomicArbPatterns} patterns)`);
         return true;
       }
 
-      // REMOVED: Sandwich and frontrun detection - too many false positives
-      // Regular traders can have multiple txs in same slot legitimately
+      // Sandwich/frontrun detection: multiple transactions in same slot is suspicious
+      // Regular traders rarely have 3+ same-slot transactions
+      if (sameSlotTxCount >= 3) {
+        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... flagged as potential sandwich/frontrun bot (${sameSlotTxCount} same-slot txs)`);
+        return true;
+      }
 
       return false;
 

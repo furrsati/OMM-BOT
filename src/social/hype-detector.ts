@@ -1,6 +1,7 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { logger } from '../utils/logger';
+import { rateLimitedRPC } from '../utils/rate-limiter';
 import axios from 'axios';
 
 /**
@@ -167,19 +168,22 @@ export class HypeDetector {
     try {
       const tokenPubkey = new PublicKey(tokenAddress);
 
-      const accounts = await this.connection.getProgramAccounts(
-        TOKEN_PROGRAM_ID,
-        {
-          filters: [
-            { dataSize: 165 },
-            {
-              memcmp: {
-                offset: 0,
-                bytes: tokenPubkey.toBase58()
+      const accounts = await rateLimitedRPC(
+        () => this.connection.getProgramAccounts(
+          TOKEN_PROGRAM_ID,
+          {
+            filters: [
+              { dataSize: 165 },
+              {
+                memcmp: {
+                  offset: 0,
+                  bytes: tokenPubkey.toBase58()
+                }
               }
-            }
-          ]
-        }
+            ]
+          }
+        ),
+        2 // low priority - hype detection is not time-critical
       );
 
       // Count accounts with non-zero balance
@@ -207,10 +211,9 @@ export class HypeDetector {
       const tokenPubkey = new PublicKey(tokenAddress);
 
       // Get transactions from the last 5 minutes
-      const signatures = await this.connection.getSignaturesForAddress(
-        tokenPubkey,
-        { limit: 100 },
-        'confirmed'
+      const signatures = await rateLimitedRPC(
+        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 100 }, 'confirmed'),
+        2
       );
 
       const fiveMinutesAgo = Date.now() / 1000 - 300;
@@ -258,10 +261,9 @@ export class HypeDetector {
       const tokenPubkey = new PublicKey(tokenAddress);
       const fifteenMinutesAgo = Date.now() / 1000 - 900;
 
-      const signatures = await this.connection.getSignaturesForAddress(
-        tokenPubkey,
-        { limit: 100 },
-        'confirmed'
+      const signatures = await rateLimitedRPC(
+        () => this.connection.getSignaturesForAddress(tokenPubkey, { limit: 100 }, 'confirmed'),
+        2
       );
 
       const recentSigs = signatures.filter(s => s.blockTime && s.blockTime > fifteenMinutesAgo);
@@ -269,9 +271,9 @@ export class HypeDetector {
 
       for (const sig of recentSigs.slice(0, 30)) {
         try {
-          const tx = await this.connection.getParsedTransaction(
-            sig.signature,
-            { maxSupportedTransactionVersion: 0 }
+          const tx = await rateLimitedRPC(
+            () => this.connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 }),
+            1 // lowest priority
           );
 
           if (!tx || !tx.meta) continue;
