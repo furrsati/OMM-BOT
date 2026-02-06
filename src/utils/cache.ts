@@ -9,6 +9,7 @@ import { logger } from './logger';
 class CacheManager {
   private enabled: boolean = true;
   private memoryCache: Map<string, { value: any; expiresAt: number }> = new Map();
+  private cleanupIntervalId: NodeJS.Timeout | null = null;
 
   // Memory management - prevent unbounded cache growth
   private readonly MAX_MEMORY_CACHE_SIZE = 200; // Reduced for 512MB Render instances
@@ -123,6 +124,23 @@ class CacheManager {
 
   async close(): Promise<void> {
     // PostgreSQL connection is managed by the pool, no need to close here
+    this.stop();
+  }
+
+  // Start periodic cleanup (call after initialize)
+  startCleanupInterval(): void {
+    if (this.cleanupIntervalId) return; // Already running
+    this.cleanupIntervalId = setInterval(() => {
+      this.cleanupMemoryCache();
+    }, 5 * 60 * 1000); // 5 minutes
+  }
+
+  // Stop cleanup interval and clear cache (call on shutdown)
+  stop(): void {
+    if (this.cleanupIntervalId) {
+      clearInterval(this.cleanupIntervalId);
+      this.cleanupIntervalId = null;
+    }
     this.memoryCache.clear();
   }
 
@@ -147,7 +165,5 @@ class CacheManager {
 
 export const cacheManager = new CacheManager();
 
-// Cleanup memory cache every 5 minutes
-setInterval(() => {
-  cacheManager.cleanupMemoryCache();
-}, 5 * 60 * 1000);
+// Start cleanup interval - this is now properly tracked and can be stopped
+cacheManager.startCleanupInterval();

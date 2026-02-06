@@ -34,6 +34,10 @@ export class AlertManager {
   private telegramClient: TelegramClient;
   private discordClient: DiscordClient;
 
+  // Interval tracking for proper cleanup
+  private deduplicationIntervalId: NodeJS.Timeout | null = null;
+  private queueProcessorIntervalId: NodeJS.Timeout | null = null;
+
   // Queue for managing high-frequency alerts
   private queue: QueuedAlert[] = [];
   private readonly maxQueueSize = 1000;
@@ -79,7 +83,7 @@ export class AlertManager {
     this.startQueueProcessor();
 
     // Clean up old deduplication entries periodically
-    setInterval(() => this.cleanupDeduplication(), 60000); // Every minute
+    this.deduplicationIntervalId = setInterval(() => this.cleanupDeduplication(), 60000); // Every minute
 
     const telegramEnabled = this.telegramClient.isEnabled();
     const discordEnabled = this.discordClient.isEnabled();
@@ -279,13 +283,32 @@ export class AlertManager {
    * Start queue processor (processes every 500ms)
    */
   private startQueueProcessor(): void {
-    setInterval(() => {
+    this.queueProcessorIntervalId = setInterval(() => {
       if (!this.processingQueue && this.queue.length > 0) {
         this.processQueue().catch(error => {
           logger.error('Queue processor error', { error: error.message });
         });
       }
     }, 500);
+  }
+
+  /**
+   * Stop the alert manager (cleanup intervals and clear queues)
+   */
+  stop(): void {
+    if (this.deduplicationIntervalId) {
+      clearInterval(this.deduplicationIntervalId);
+      this.deduplicationIntervalId = null;
+    }
+    if (this.queueProcessorIntervalId) {
+      clearInterval(this.queueProcessorIntervalId);
+      this.queueProcessorIntervalId = null;
+    }
+    // Clear queues and caches
+    this.queue.length = 0;
+    this.recentAlerts.clear();
+    this.history.length = 0;
+    logger.info('Alert Manager stopped');
   }
 
   /**

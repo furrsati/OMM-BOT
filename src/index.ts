@@ -1,8 +1,9 @@
 import dotenv from 'dotenv';
 import { Connection, Keypair } from '@solana/web3.js';
 import { logger } from './utils/logger';
+import { cacheManager } from './utils/cache';
 import { getRPCManager } from './config/rpc.config';
-import { initializePostgres, initializeSchema, healthCheck as dbHealthCheck, closePool } from './db/postgres';
+import { initializePostgres, initializeSchema, healthCheck as dbHealthCheck, closePool, query } from './db/postgres';
 import { initializeCache, healthCheck as cacheHealthCheck, cleanupExpiredCache } from './db/cache';
 import { PatternMatcher, WeightOptimizer, LearningScheduler } from './learning';
 import { OnChainSocialIntelligence } from './social/on-chain-social-intelligence';
@@ -66,10 +67,13 @@ async function main() {
   let alertManager: AlertManager | undefined;
   let killSwitch: KillSwitch | undefined;
   let apiServer: APIServer | undefined;
+  let socialIntelligence: OnChainSocialIntelligence | undefined;
+  let hypeDetector: HypeDetector | undefined;
 
   // Track intervals for proper cleanup (memory leak prevention)
   let cacheCleanupInterval: NodeJS.Timeout | undefined;
   let memoryMonitorInterval: NodeJS.Timeout | undefined;
+  let archivalInterval: NodeJS.Timeout | undefined;
 
   try {
     // ============================================================
@@ -169,42 +173,103 @@ async function main() {
       });
     }, 5 * 60 * 1000); // 5 minutes
 
-    // Memory monitoring - check every 30 seconds for 512MB Render instances
+    // Memory monitoring - check every 15 seconds for better response
     memoryMonitorInterval = setInterval(() => {
       const usage = process.memoryUsage();
       const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
       const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
       const rssMB = Math.round(usage.rss / 1024 / 1024);
 
-      // NEW: Proactive GC at 300MB to prevent hitting 400MB
-      if (rssMB > 300 && rssMB <= 400) {
-        logger.info('⚠️ Memory elevated, triggering proactive GC', { heapUsedMB, rssMB });
+      // Log memory usage periodically
+      logger.debug('Memory check', { heapUsedMB, heapTotalMB, rssMB });
+
+      // EARLY WARNING: At 250MB, start proactive cleanup
+      if (rssMB > 250 && rssMB <= 350) {
+        logger.info('⚠️ Memory pressure detected, triggering cleanup', { heapUsedMB, rssMB });
+
+        // Trigger cleanup on components that support it
+        if (signalTracker && typeof (signalTracker as any).cleanup === 'function') {
+          (signalTracker as any).cleanup();
+        }
+        if (walletScanner && typeof (walletScanner as any).cleanup === 'function') {
+          (walletScanner as any).cleanup();
+        }
+
+        // Force GC
         if (global.gc) {
           global.gc();
         }
       }
 
-      // CRITICAL: 512MB Render plan - emergency at 400MB
-      if (rssMB > 400) {
-        logger.warn('🚨 CRITICAL MEMORY - forcing cleanup', {
+      // HIGH PRESSURE: At 350MB, aggressive cleanup
+      if (rssMB > 350 && rssMB <= 450) {
+        logger.warn('🚨 HIGH MEMORY PRESSURE - aggressive cleanup', {
           heapUsedMB,
           heapTotalMB,
           rssMB
         });
 
-        // Force garbage collection if available
-        if (global.gc) {
-          global.gc();
-          logger.info('Forced garbage collection');
+        // Clear all clearable caches
+        if (socialIntelligence) {
+          socialIntelligence.stop();
+          socialIntelligence = new OnChainSocialIntelligence(rpcManager.getCurrentConnection());
+        }
+        if (hypeDetector) {
+          hypeDetector.stop();
+          hypeDetector = new HypeDetector(rpcManager.getCurrentConnection());
         }
 
-        // Emergency: Clear all caches if above 450MB
-        if (rssMB > 450) {
-          logger.error('🚨 EMERGENCY MEMORY CLEANUP - clearing caches');
-          // The individual components will re-populate from DB as needed
+        // Force double GC
+        if (global.gc) {
+          global.gc();
+          global.gc();
+          logger.info('Forced double garbage collection');
         }
       }
-    }, 30 * 1000); // Check every 30 seconds
+
+      // CRITICAL: At 450MB+, emergency mode
+      if (rssMB > 450) {
+        logger.error('🚨 CRITICAL MEMORY - emergency cleanup', { rssMB });
+
+        // Clear cache manager
+        cacheManager.stop();
+        cacheManager.startCleanupInterval();
+
+        // Force GC multiple times
+        if (global.gc) {
+          for (let i = 0; i < 3; i++) {
+            global.gc();
+          }
+          logger.info('Forced triple garbage collection');
+        }
+      }
+    }, 15 * 1000); // Check every 15 seconds (was 30)
+
+    // Database archival - clean up old patterns and trades daily
+    archivalInterval = setInterval(async () => {
+      try {
+        logger.info('Starting database archival...');
+
+        // Delete patterns older than 7 days
+        await query(`DELETE FROM win_patterns WHERE last_seen < NOW() - INTERVAL '7 days'`);
+        await query(`DELETE FROM danger_patterns WHERE last_seen < NOW() - INTERVAL '7 days'`);
+
+        // Delete old trade fingerprints (keep last 500)
+        await query(`
+          DELETE FROM trades
+          WHERE id NOT IN (
+            SELECT id FROM trades ORDER BY created_at DESC LIMIT 500
+          )
+        `);
+
+        // Clean up old cache entries
+        await query(`DELETE FROM cache WHERE expires_at < NOW()`);
+
+        logger.info('✅ Database archival completed');
+      } catch (error: any) {
+        logger.error('Database archival failed', { error: error.message });
+      }
+    }, 24 * 60 * 60 * 1000); // Every 24 hours
 
     // ============================================================
     // PHASE 7: INITIALIZE LEARNING ENGINE (COMPLETE)
@@ -251,14 +316,11 @@ async function main() {
 
     logger.info('📊 Initializing On-Chain Social Intelligence...');
     const connection = rpcManager.getCurrentConnection();
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const socialIntelligence = new OnChainSocialIntelligence(connection);
+    socialIntelligence = new OnChainSocialIntelligence(connection);
     logger.info('✅ On-Chain Social Intelligence initialized');
 
     logger.info('📈 Initializing Hype Detector...');
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const hypeDetector = new HypeDetector(connection);
+    hypeDetector = new HypeDetector(connection);
     logger.info('✅ Hype Detector initialized');
 
     // ============================================================
@@ -744,8 +806,12 @@ async function main() {
           clearInterval(memoryMonitorInterval);
           memoryMonitorInterval = undefined;
         }
+        if (archivalInterval) {
+          clearInterval(archivalInterval);
+          archivalInterval = undefined;
+        }
 
-        // Send shutdown alert
+        // Send shutdown alert before stopping alertManager
         if (alertManager) {
           await alertManager.sendAlert({
             level: 'LOW',
@@ -755,9 +821,13 @@ async function main() {
           });
         }
 
-        // Stop data collection systems
+        // Stop all components with proper cleanup
+        // Data collection systems
         if (walletScanner) {
           walletScanner.stopScanning();
+        }
+        if (walletManager) {
+          walletManager.stop();
         }
         if (priceFeed) {
           priceFeed.stop();
@@ -766,38 +836,62 @@ async function main() {
           regimeDetector.stop();
         }
 
-        // Stop learning scheduler
+        // Social intelligence
+        if (socialIntelligence) {
+          socialIntelligence.stop();
+        }
+        if (hypeDetector) {
+          hypeDetector.stop();
+        }
+
+        // Learning scheduler
         if (learningScheduler) {
           learningScheduler.stop();
         }
 
-        // Stop conviction engine
+        // Conviction engine
         if (signalTracker) {
           signalTracker.stop();
         }
 
-        // Stop execution engine
+        // Execution engine
         if (executionManager) {
           executionManager.stop();
         }
 
-        // Stop position manager
+        // Position manager
         if (positionManager) {
           positionManager.stop();
         }
 
-        // Stop API server
+        // Alert system (stop intervals after sending final alert)
+        if (alertManager) {
+          alertManager.stop();
+        }
+        if (killSwitch) {
+          killSwitch.stop();
+        }
+
+        // API server
         if (apiServer) {
           await apiServer.stop();
         }
 
-        // Stop RPC manager
+        // RPC manager
         if (rpcManager) {
           rpcManager.stop();
         }
 
+        // Cache manager (clears memory cache and stops cleanup interval)
+        cacheManager.stop();
+
         // Close database connections
         await closePool();
+
+        // Force final garbage collection
+        if (global.gc) {
+          global.gc();
+        }
 
         logger.info('✅ Shutdown complete');
         process.exit(0);

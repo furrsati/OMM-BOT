@@ -943,4 +943,12 @@ export class DangerMonitor {
       lastHolderCheck: data.lastHolderCheck
     };
   }
+
+  /**
+   * Stop monitoring and clear all data (call on shutdown)
+   */
+  stop(): void {
+    this.monitoringData.clear();
+    logger.info('Danger Monitor stopped');
+  }
 }

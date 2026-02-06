@@ -26,6 +26,7 @@ export class KillSwitch {
   private alertManager: AlertManager;
   private positionManager?: any; // Will be populated when position manager exists
   private executionEngine?: any; // Will be populated when execution engine exists
+  private autoTriggerIntervalId: NodeJS.Timeout | null = null;
 
   private state: KillSwitchState = {
     triggered: false,
@@ -58,13 +59,24 @@ export class KillSwitch {
     logger.info('Kill Switch armed and ready');
 
     // Start periodic auto-trigger checks (every 10 seconds)
-    setInterval(() => {
+    this.autoTriggerIntervalId = setInterval(() => {
       if (!this.state.triggered) {
         this.checkAutoTriggers().catch(error => {
           logger.error('Kill switch auto-trigger check failed', { error: error.message });
         });
       }
     }, 10000);
+  }
+
+  /**
+   * Stop the kill switch (cleanup interval)
+   */
+  stop(): void {
+    if (this.autoTriggerIntervalId) {
+      clearInterval(this.autoTriggerIntervalId);
+      this.autoTriggerIntervalId = null;
+    }
+    logger.info('Kill Switch stopped');
   }
 
   /**

@@ -634,6 +634,16 @@ export class OnChainSocialIntelligence {
       greenFlags: [],
     };
   }
+
+  /**
+   * Stop and clear all cached data (call on shutdown)
+   */
+  stop(): void {
+    this.walletRelationships.clear();
+    this.knownGoodWallets.clear();
+    this.knownBadWallets.clear();
+    logger.info('On-Chain Social Intelligence stopped');
+  }
 }
 
 /**

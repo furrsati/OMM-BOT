@@ -27,6 +27,7 @@ export interface SellExecutionResult {
   reason: string;
   executionLatencyMs?: number;
   error?: string;
+  simulated?: boolean;
 }
 
 export type SellReason = 'take_profit' | 'stop_loss' | 'trailing_stop' | 'time_stop' | 'danger_signal' | 'manual';
@@ -140,6 +141,39 @@ export class SellExecutor {
             logger.warn('Transaction validation failed, retrying...');
             await this.delay(this.RETRY_DELAY_MS);
             continue;
+          }
+
+          // Check for paper trading mode - simulate instead of executing
+          if (process.env.PAPER_TRADING_MODE === 'true') {
+            const executionLatency = Date.now() - startTime;
+            const exitPrice = builtTx.quote.outputAmount / builtTx.quote.inputAmount;
+
+            logger.info('📋 SIMULATED SELL', {
+              token: position.tokenAddress.slice(0, 8),
+              tokensSold: tokensToSell,
+              expectedSOL: (builtTx.quote.outputAmount / 1e9).toFixed(4),
+              exitPrice: exitPrice.toExponential(4),
+              reason,
+              urgency,
+              priceImpact: builtTx.quote.priceImpact.toFixed(2) + '%',
+              attempts: attempt,
+              latencyMs: executionLatency
+            });
+
+            return {
+              success: true,
+              txSignature: `SIMULATED_${Date.now()}_${position.tokenAddress.slice(0, 8)}`,
+              tokenAddress: position.tokenAddress,
+              tokensSold: tokensToSell,
+              solReceived: builtTx.quote.outputAmount / 1e9,
+              exitPrice,
+              slippage: builtTx.estimatedSlippage,
+              priorityFee: builtTx.priorityFee,
+              attempts: attempt,
+              reason,
+              executionLatencyMs: executionLatency,
+              simulated: true
+            };
           }
 
           // Send transaction

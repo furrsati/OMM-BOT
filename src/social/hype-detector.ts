@@ -383,4 +383,12 @@ export class HypeDetector {
     // Token must have at least one social link
     return !!(socialLinks.twitter || socialLinks.telegram || socialLinks.website);
   }
+
+  /**
+   * Stop and clear all cached data (call on shutdown)
+   */
+  stop(): void {
+    this.holderCountCache.clear();
+    logger.info('Hype Detector stopped');
+  }
 }

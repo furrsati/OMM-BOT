@@ -27,6 +27,7 @@ export interface BuyExecutionResult {
   attempts: number;
   executionLatencyMs?: number;
   error?: string;
+  simulated?: boolean;
 }
 
 export class BuyExecutor {
@@ -128,6 +129,37 @@ export class BuyExecutor {
             logger.warn('Transaction validation failed, retrying...');
             await this.delay(this.RETRY_DELAY_MS);
             continue;
+          }
+
+          // Check for paper trading mode - simulate instead of executing
+          if (process.env.PAPER_TRADING_MODE === 'true') {
+            const executionLatency = Date.now() - startTime;
+            const entryPrice = builtTx.quote.inputAmount / builtTx.quote.outputAmount;
+
+            logger.info('📋 SIMULATED BUY', {
+              token: signal.tokenAddress.slice(0, 8),
+              amountSOL: (positionSizeSOL / 1e9).toFixed(4),
+              expectedTokens: builtTx.quote.outputAmount,
+              expectedPrice: entryPrice.toExponential(4),
+              priceImpact: builtTx.quote.priceImpact.toFixed(2) + '%',
+              conviction: decision.convictionScore.toFixed(1),
+              attempts: attempt,
+              latencyMs: executionLatency
+            });
+
+            return {
+              success: true,
+              txSignature: `SIMULATED_${Date.now()}_${signal.tokenAddress.slice(0, 8)}`,
+              tokenAddress: signal.tokenAddress,
+              amountSOL: positionSizeSOL / 1e9,
+              tokensReceived: builtTx.quote.outputAmount,
+              entryPrice,
+              slippage: builtTx.estimatedSlippage,
+              priorityFee: builtTx.priorityFee,
+              attempts: attempt,
+              executionLatencyMs: executionLatency,
+              simulated: true
+            };
           }
 
           // Send transaction

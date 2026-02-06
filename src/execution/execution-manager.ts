@@ -513,7 +513,8 @@ export class ExecutionManager {
               slippage: buyResult.slippage,
               priorityFee: buyResult.priorityFee,
               executionLatencyMs: buyResult.executionLatencyMs,
-              attempts: buyResult.attempts
+              attempts: buyResult.attempts,
+              simulated: buyResult.simulated || false
             })
           ]
         );
@@ -560,7 +561,8 @@ export class ExecutionManager {
               sellTxSignature: sellResult.txSignature,
               tokensSold: sellResult.tokensSold,
               executionLatencyMs: sellResult.executionLatencyMs,
-              attempts: sellResult.attempts
+              attempts: sellResult.attempts,
+              simulated: sellResult.simulated || false
             }),
             sellResult.tokenAddress
           ]
