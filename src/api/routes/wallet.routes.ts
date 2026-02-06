@@ -29,7 +29,20 @@ router.get(
   '/',
   asyncHandler(async (_req: any, res: any) => {
     const ctx = botContextManager.getContext();
-    const walletAddress = process.env.BOT_WALLET_ADDRESS;
+
+    // Derive wallet address from private key (consistent with index.ts)
+    let walletAddress: string | null = null;
+    if (process.env.WALLET_PRIVATE_KEY) {
+      try {
+        const bs58 = await import('bs58');
+        const { Keypair } = await import('@solana/web3.js');
+        const privateKeyBytes = bs58.decode(process.env.WALLET_PRIVATE_KEY);
+        const keypair = Keypair.fromSecretKey(privateKeyBytes);
+        walletAddress = keypair.publicKey.toString();
+      } catch {
+        // Invalid private key
+      }
+    }
 
     if (!walletAddress) {
       return res.json({
@@ -149,12 +162,30 @@ router.post(
 
     // Get current wallet balance to validate amount
     const ctx = botContextManager.getContext();
-    const walletAddress = process.env.BOT_WALLET_ADDRESS;
 
-    if (!walletAddress) {
+    // Derive wallet address from private key (consistent with index.ts)
+    let walletAddress: string | null = null;
+    let fromWallet: any = null;
+    if (process.env.WALLET_PRIVATE_KEY) {
+      try {
+        const bs58Import = await import('bs58');
+        const { Keypair } = await import('@solana/web3.js');
+        const privateKeyBytes = bs58Import.decode(process.env.WALLET_PRIVATE_KEY);
+        fromWallet = Keypair.fromSecretKey(privateKeyBytes);
+        walletAddress = fromWallet.publicKey.toString();
+      } catch {
+        return res.status(503).json({
+          success: false,
+          error: 'Invalid wallet private key',
+          code: 'INVALID_PRIVATE_KEY',
+        });
+      }
+    }
+
+    if (!walletAddress || !fromWallet) {
       return res.status(503).json({
         success: false,
-        error: 'Wallet not configured',
+        error: 'Wallet not configured - set WALLET_PRIVATE_KEY',
         code: 'WALLET_NOT_CONFIGURED',
       });
     }
@@ -187,39 +218,10 @@ router.post(
       const {
         Transaction,
         SystemProgram,
-        Keypair,
         sendAndConfirmTransaction,
       } = await import('@solana/web3.js');
 
-      // Load bot wallet keypair from environment
-      const privateKey = process.env.BOT_WALLET_PRIVATE_KEY;
-      if (!privateKey) {
-        return res.status(503).json({
-          success: false,
-          error: 'Bot wallet private key not configured',
-          code: 'WALLET_NOT_CONFIGURED',
-        });
-      }
-
-      // Parse the private key (supports base58 or JSON array format)
-      let secretKey: Uint8Array;
-      try {
-        if (privateKey.startsWith('[')) {
-          secretKey = new Uint8Array(JSON.parse(privateKey));
-        } else {
-          // Base58 format - need to decode
-          const bs58 = await import('bs58');
-          secretKey = bs58.decode(privateKey);
-        }
-      } catch (parseError: any) {
-        return res.status(503).json({
-          success: false,
-          error: 'Invalid wallet private key format',
-          code: 'INVALID_PRIVATE_KEY',
-        });
-      }
-
-      const fromWallet = Keypair.fromSecretKey(secretKey);
+      // fromWallet was already created above when we derived the address
       const toPubkey = new PublicKey(destinationAddress);
 
       // Convert SOL amount to lamports

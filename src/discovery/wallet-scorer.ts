@@ -15,6 +15,7 @@
  */
 
 import { Connection } from '@solana/web3.js';
+import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger';
 import { SmartWallet } from '../types';
 import { query } from '../db/postgres';
@@ -104,9 +105,11 @@ export class WalletScorer {
         return null;
       }
 
-      // Filter: Must have 3+ tokens entered
-      if (performance.tokensEntered.length < 3) {
-        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... has < 3 tokens, skipping`);
+      // Filter: Must have at least 1 token entered
+      // RELAXED: Changed from 3 to 1 to allow bootstrapping new wallets
+      // Tier 3 wallets with 1-2 tokens will be scored but ranked lower
+      if (performance.tokensEntered.length < 1) {
+        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... has no tokens, skipping`);
         return null;
       }
 
@@ -455,23 +458,24 @@ export class WalletScorer {
       for (const wallet of wallets) {
         await query(`
           INSERT INTO smart_wallets (
-            address, tier, score, win_rate, average_return,
+            id, address, tier, score, win_rate, average_return,
             tokens_entered, last_active, total_trades,
             successful_trades, average_hold_time, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
           ON CONFLICT (address)
           DO UPDATE SET
-            tier = $2,
-            score = $3,
-            win_rate = $4,
-            average_return = $5,
-            tokens_entered = $6,
-            last_active = $7,
-            total_trades = $8,
-            successful_trades = $9,
-            average_hold_time = $10,
+            tier = $3,
+            score = $4,
+            win_rate = $5,
+            average_return = $6,
+            tokens_entered = $7,
+            last_active = $8,
+            total_trades = $9,
+            successful_trades = $10,
+            average_hold_time = $11,
             updated_at = NOW()
         `, [
+          randomUUID(),
           wallet.address,
           wallet.tier,
           wallet.score,
@@ -500,8 +504,12 @@ export class WalletScorer {
     try {
       // Get wallets from smart_wallets table (all active wallets)
       const walletsResult = await query<{ address: string }>(
-        `SELECT DISTINCT address FROM smart_wallets
-         WHERE is_active = true
+        `SELECT address FROM (
+           SELECT DISTINCT ON (address) address, last_active
+           FROM smart_wallets
+           WHERE is_active = true
+           ORDER BY address, last_active DESC
+         ) sub
          ORDER BY last_active DESC
          LIMIT 200`
       );

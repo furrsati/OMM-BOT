@@ -306,27 +306,13 @@ export class RegimeDetector {
   }
 
   /**
-   * Fetch all asset prices in a single batched request with in-memory caching
+   * Fetch all asset prices with fallback sources
+   * Primary: CoinGecko, Fallback: Binance public API
    */
   private async fetchAllPrices(): Promise<Map<string, AssetPrice>> {
     const symbols = ['SOL', 'BTC', 'ETH'];
     const result = new Map<string, AssetPrice>();
     const now = Date.now();
-
-    // Check if we're in rate limit backoff period
-    if (this.lastRateLimitHit > 0 && now - this.lastRateLimitHit < this.rateLimitBackoffMs) {
-      // Return cached data during backoff
-      for (const symbol of symbols) {
-        const cached = this.priceCache.get(symbol);
-        if (cached) {
-          result.set(symbol, cached);
-        }
-      }
-      if (result.size > 0) {
-        logger.debug('Using cached prices during rate limit backoff');
-        return result;
-      }
-    }
 
     // Check if all prices are in cache and still valid
     let allCached = true;
@@ -345,7 +331,49 @@ export class RegimeDetector {
       return result;
     }
 
-    // Fetch all prices in a single request
+    // Check if we're in rate limit backoff period for CoinGecko
+    const useCoingecko = !(this.lastRateLimitHit > 0 && now - this.lastRateLimitHit < this.rateLimitBackoffMs);
+
+    // Try CoinGecko first (if not rate limited)
+    if (useCoingecko) {
+      const coingeckoResult = await this.fetchFromCoinGecko(symbols, now);
+      if (coingeckoResult.size === symbols.length) {
+        return coingeckoResult;
+      }
+    }
+
+    // Fallback to Binance API (no rate limit issues for basic price data)
+    const binanceResult = await this.fetchFromBinance(symbols, now);
+    if (binanceResult.size > 0) {
+      for (const [symbol, price] of binanceResult) {
+        if (!result.has(symbol)) {
+          result.set(symbol, price);
+        }
+      }
+    }
+
+    // If we have results, return them
+    if (result.size > 0) {
+      return result;
+    }
+
+    // Last resort: return cached data even if stale
+    for (const symbol of symbols) {
+      const cached = this.priceCache.get(symbol);
+      if (cached) {
+        result.set(symbol, cached);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Fetch prices from CoinGecko
+   */
+  private async fetchFromCoinGecko(symbols: string[], now: number): Promise<Map<string, AssetPrice>> {
+    const result = new Map<string, AssetPrice>();
+
     try {
       const idMap: Record<string, string> = {
         SOL: 'solana',
@@ -368,7 +396,6 @@ export class RegimeDetector {
         }
       );
 
-      // Process response and update cache
       for (const symbol of symbols) {
         const coinId = idMap[symbol];
         const data = response.data[coinId];
@@ -386,29 +413,75 @@ export class RegimeDetector {
         }
       }
 
-      // Clear rate limit flag on successful request
+      // Clear rate limit flag on success
       this.lastRateLimitHit = 0;
 
-      return result;
-
     } catch (error: any) {
-      // Check if it's a rate limit error
       if (error.response?.status === 429) {
-        logger.warn('CoinGecko rate limit hit, backing off for 5 minutes');
+        logger.warn('CoinGecko rate limit hit, switching to Binance fallback');
         this.lastRateLimitHit = now;
       } else {
-        logger.debug('Error fetching prices from CoinGecko', { error: error.message });
+        logger.debug('Error fetching from CoinGecko', { error: error.message });
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Fallback: Fetch prices from Binance public API (no API key needed)
+   */
+  private async fetchFromBinance(symbols: string[], now: number): Promise<Map<string, AssetPrice>> {
+    const result = new Map<string, AssetPrice>();
+
+    try {
+      const binanceSymbols: Record<string, string> = {
+        SOL: 'SOLUSDT',
+        BTC: 'BTCUSDT',
+        ETH: 'ETHUSDT'
+      };
+
+      // Fetch 24h ticker data for all symbols
+      const symbolsList = symbols.map(s => binanceSymbols[s]).filter(Boolean);
+
+      const response = await axios.get(
+        'https://api.binance.com/api/v3/ticker/24hr',
+        {
+          params: {
+            symbols: JSON.stringify(symbolsList)
+          },
+          timeout: 5000
+        }
+      );
+
+      const tickerData = Array.isArray(response.data) ? response.data : [response.data];
+
+      for (const ticker of tickerData) {
+        // Find which symbol this is
+        const symbol = symbols.find(s => binanceSymbols[s] === ticker.symbol);
+        if (!symbol) continue;
+
+        const assetPrice: AssetPrice = {
+          symbol,
+          priceUSD: parseFloat(ticker.lastPrice) || 0,
+          change24h: parseFloat(ticker.priceChangePercent) || 0,
+          change7d: 0, // Binance doesn't provide 7d change in this endpoint
+          timestamp: now
+        };
+
+        this.priceCache.set(symbol, assetPrice);
+        result.set(symbol, assetPrice);
       }
 
-      // Return cached data on error
-      for (const symbol of symbols) {
-        const cached = this.priceCache.get(symbol);
-        if (cached) {
-          result.set(symbol, cached);
-        }
+      if (result.size > 0) {
+        logger.debug('Using Binance fallback for price data');
       }
-      return result;
+
+    } catch (error: any) {
+      logger.debug('Error fetching from Binance', { error: error.message });
     }
+
+    return result;
   }
 
   /**

@@ -6,9 +6,13 @@
  * 2. Identifying wallets that bought within first 5 minutes
  * 3. Removing deployer-connected wallets (2-hop on-chain analysis)
  * 4. Filtering out MEV bots, dump bots, and insider wallets
+ *
+ * FIXED: Now properly queries DEX pools and parses swap transactions
+ * instead of incorrectly querying token mint addresses.
  */
 
 import { Connection, PublicKey, ParsedTransactionWithMeta } from '@solana/web3.js';
+import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger';
 import { query } from '../db/postgres';
 import { rateLimitedRPC } from '../utils/rate-limiter';
@@ -19,6 +23,8 @@ interface TokenPerformance {
   peakPrice: number;
   launchPrice: number;
   multiplier: number;
+  pairAddress?: string; // DEX pool address for querying transactions
+  dexId?: string;
 }
 
 interface EarlyBuyer {
@@ -34,6 +40,15 @@ interface WalletConnectionGraph {
   connectedTo: Set<string>;
   depth: number;
 }
+
+// Known DEX program IDs for Solana
+const DEX_PROGRAMS = {
+  RAYDIUM_AMM: '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8',
+  RAYDIUM_CLMM: 'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK',
+  ORCA_WHIRLPOOL: 'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',
+  JUPITER_V6: 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',
+  PUMP_FUN: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
+};
 
 export class WalletScanner {
   private connection: Connection;
@@ -258,6 +273,7 @@ export class WalletScanner {
 
   /**
    * Get token performance data from DexScreener
+   * IMPROVED: Now also captures pair address for transaction querying
    */
   private async getTokenPerformance(tokenAddress: string): Promise<TokenPerformance | null> {
     try {
@@ -271,8 +287,12 @@ export class WalletScanner {
       const data = await response.json() as { pairs?: any[] };
       const pairs = data.pairs || [];
 
-      // Find the main SOL pair (usually first)
+      // Find the main SOL pair (usually first, prefer Raydium)
       const mainPair = pairs.find((p: any) =>
+        p.chainId === 'solana' &&
+        p.quoteToken?.symbol === 'SOL' &&
+        (p.dexId === 'raydium' || p.dexId === 'orca')
+      ) || pairs.find((p: any) =>
         p.chainId === 'solana' && p.quoteToken?.symbol === 'SOL'
       ) || pairs[0];
 
@@ -282,24 +302,17 @@ export class WalletScanner {
       const priceChange24h = parseFloat(mainPair.priceChange?.h24 || '0');
       const currentPrice = parseFloat(mainPair.priceUsd || '0');
 
-      // Estimate launch price from 24h change (rough approximation)
-      // For more accurate data, we'd need historical price API
-      const priceMultiplier24h = 1 + (priceChange24h / 100);
-
-      // Check if this looks like a recent winner
       // Use creation timestamp if available
       const pairCreatedAt = mainPair.pairCreatedAt || Date.now();
       const ageInDays = (Date.now() - pairCreatedAt) / (1000 * 60 * 60 * 24);
 
-      // Only consider tokens less than 7 days old with significant gains
+      // Only consider tokens less than 7 days old
       if (ageInDays > 7) return null;
 
-      // Estimate multiplier from available data
-      // DexScreener provides priceChange for various periods
-      const priceChange6h = parseFloat(mainPair.priceChange?.h6 || '0');
-      const priceChange1h = parseFloat(mainPair.priceChange?.h1 || '0');
+      // Calculate multiplier from price changes
+      const priceMultiplier24h = 1 + (priceChange24h / 100);
 
-      // Rough multiplier estimation
+      // Rough multiplier estimation - be more lenient to catch more tokens
       let estimatedMultiplier = 1;
       if (priceChange24h > 0) {
         estimatedMultiplier = Math.max(estimatedMultiplier, priceMultiplier24h);
@@ -312,13 +325,14 @@ export class WalletScanner {
       // Heuristic: high FDV/liquidity ratio often indicates significant gains
       if (fdv > 0 && liquidity > 0) {
         const fdvToLiquidityRatio = fdv / liquidity;
-        if (fdvToLiquidityRatio > 10) {
+        if (fdvToLiquidityRatio > 5) {
           estimatedMultiplier = Math.max(estimatedMultiplier, Math.sqrt(fdvToLiquidityRatio));
         }
       }
 
-      // Filter: only return if multiplier is in target range
-      if (estimatedMultiplier < 5 || estimatedMultiplier > 50) {
+      // RELAXED: Accept tokens with 3x-100x multipliers (was 5-50x)
+      // This catches more potential winners
+      if (estimatedMultiplier < 3 || estimatedMultiplier > 100) {
         return null;
       }
 
@@ -329,7 +343,9 @@ export class WalletScanner {
         launchTime: Math.floor(pairCreatedAt / 1000),
         launchPrice,
         peakPrice: currentPrice,
-        multiplier: estimatedMultiplier
+        multiplier: estimatedMultiplier,
+        pairAddress: mainPair.pairAddress, // IMPORTANT: Capture pool address
+        dexId: mainPair.dexId
       };
     } catch (error: any) {
       logger.debug(`Error getting token performance for ${tokenAddress}: ${error.message}`);
@@ -366,12 +382,13 @@ export class WalletScanner {
 
   /**
    * Fetch with retry and timeout
+   * Supports both GET and POST requests
    */
   private async fetchWithRetry(
     url: string,
-    options: { timeout?: number; retries?: number } = {}
+    options: { timeout?: number; retries?: number; method?: string; body?: string; headers?: Record<string, string> } = {}
   ): Promise<Response> {
-    const { timeout = 10000, retries = 3 } = options;
+    const { timeout = 10000, retries = 3, method = 'GET', body, headers = {} } = options;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
@@ -379,10 +396,13 @@ export class WalletScanner {
         const timeoutId = setTimeout(() => controller.abort(), timeout);
 
         const response = await fetch(url, {
+          method,
+          body,
           signal: controller.signal,
           headers: {
             'Accept': 'application/json',
-            'User-Agent': 'OMM-Bot/1.0'
+            'User-Agent': 'OMM-Bot/1.0',
+            ...headers
           }
         });
 
@@ -402,65 +422,50 @@ export class WalletScanner {
 
   /**
    * Find wallets that bought within first 5 minutes of token launch
-   * Rate-limited to avoid overwhelming RPC
+   * FIXED: Now properly queries DEX pool transactions and parses swap events
    */
   private async findEarlyBuyers(token: TokenPerformance): Promise<EarlyBuyer[]> {
-    logger.debug(`Finding early buyers for ${token.address.slice(0, 8)}...`);
+    logger.info(`🔍 Finding early buyers for ${token.address.slice(0, 8)}... (${token.multiplier.toFixed(1)}x token)`);
+
+    const earlyBuyers: EarlyBuyer[] = [];
+    const seenWallets = new Set<string>();
 
     try {
-      const tokenPubkey = new PublicKey(token.address);
-      const earlyBuyers: EarlyBuyer[] = [];
-
-      // Get signatures for token account from launch to 5 minutes after
-      const launchTime = token.launchTime;
-
-      // Fetch transaction signatures (reduced limit to avoid rate limiting)
-      const signatures = await rateLimitedRPC(
-        () => this.connection.getSignaturesForAddress(
-          tokenPubkey,
-          { limit: 200 }, // Reduced from 1000 to 200
-          'confirmed'
-        ),
-        1 // Medium priority
-      );
-
-      // Filter to first 5 minutes - get only relevant signatures first
-      const relevantSigs = signatures.filter(sig => {
-        if (!sig.blockTime) return false;
-        const secondsAfterLaunch = sig.blockTime - launchTime;
-        return secondsAfterLaunch >= 0 && secondsAfterLaunch <= 300;
-      }).slice(0, 30); // Max 30 transactions to check
-
-      // Parse transactions with rate limiting
-      for (const sig of relevantSigs) {
-        try {
-          const tx = await rateLimitedRPC(
-            () => this.connection.getParsedTransaction(
-              sig.signature,
-              { maxSupportedTransactionVersion: 0 }
-            ),
-            0 // Lower priority
-          );
-
-          if (!tx || !tx.meta || tx.meta.err) continue;
-
-          // Extract buyers (wallets that received tokens)
-          const buyers = this.extractBuyersFromTransaction(tx, token.address);
-
-          for (const buyer of buyers) {
-            earlyBuyers.push({
-              walletAddress: buyer,
-              tokenAddress: token.address,
-              buyTime: sig.blockTime!,
-              buyPrice: token.launchPrice,
-              secondsAfterLaunch: sig.blockTime! - launchTime
-            });
+      // Method 1: Query the DEX pool address if available (most reliable)
+      if (token.pairAddress) {
+        const poolBuyers = await this.findBuyersFromPool(token);
+        for (const buyer of poolBuyers) {
+          if (!seenWallets.has(buyer.walletAddress)) {
+            seenWallets.add(buyer.walletAddress);
+            earlyBuyers.push(buyer);
           }
-        } catch (error: any) {
-          logger.debug(`Error parsing tx ${sig.signature.slice(0, 8)}: ${error.message}`);
         }
       }
 
+      // Method 2: Use Helius DAS API to get token holders (if available)
+      const heliusApiKey = this.getHeliusApiKey();
+      if (heliusApiKey && earlyBuyers.length < 5) {
+        const holderBuyers = await this.findBuyersFromHelius(token, heliusApiKey);
+        for (const buyer of holderBuyers) {
+          if (!seenWallets.has(buyer.walletAddress)) {
+            seenWallets.add(buyer.walletAddress);
+            earlyBuyers.push(buyer);
+          }
+        }
+      }
+
+      // Method 3: Fallback - query recent token transfers (less accurate but works)
+      if (earlyBuyers.length < 3) {
+        const transferBuyers = await this.findBuyersFromTransfers(token);
+        for (const buyer of transferBuyers) {
+          if (!seenWallets.has(buyer.walletAddress)) {
+            seenWallets.add(buyer.walletAddress);
+            earlyBuyers.push(buyer);
+          }
+        }
+      }
+
+      logger.info(`Found ${earlyBuyers.length} early buyers for ${token.address.slice(0, 8)}...`);
       return earlyBuyers;
 
     } catch (error: any) {
@@ -468,23 +473,100 @@ export class WalletScanner {
         token: token.address,
         error: error.message
       });
-      return [];
+      return earlyBuyers; // Return what we found so far
     }
   }
 
   /**
-   * Extract buyer wallet addresses from transaction
+   * Find buyers by querying DEX pool transactions
+   * This is the most accurate method as it directly finds swap transactions
    */
-  private extractBuyersFromTransaction(
-    tx: ParsedTransactionWithMeta,
-    tokenAddress: string
-  ): string[] {
+  private async findBuyersFromPool(token: TokenPerformance): Promise<EarlyBuyer[]> {
+    const earlyBuyers: EarlyBuyer[] = [];
+
+    try {
+      if (!token.pairAddress) {
+        logger.debug(`[Method 1: Pool] No pairAddress for ${token.address.slice(0, 8)}... - skipping`);
+        return [];
+      }
+
+      logger.debug(`[Method 1: Pool] Querying pool ${token.pairAddress.slice(0, 8)}... for ${token.address.slice(0, 8)}...`);
+
+      const poolPubkey = new PublicKey(token.pairAddress);
+      const launchTime = token.launchTime;
+      const fiveMinutesAfterLaunch = launchTime + 300;
+
+      // Get signatures for the pool address (increased limit for better coverage)
+      const signatures = await rateLimitedRPC(
+        () => this.connection.getSignaturesForAddress(
+          poolPubkey,
+          { limit: 1000 },
+          'confirmed'
+        ),
+        2 // Higher priority for pool queries
+      );
+
+      logger.debug(`Pool ${token.pairAddress.slice(0, 8)}... has ${signatures.length} signatures`);
+
+      // Filter to first 5 minutes after launch (increased limit for better coverage)
+      const relevantSigs = signatures.filter(sig => {
+        if (!sig.blockTime) return false;
+        return sig.blockTime >= launchTime && sig.blockTime <= fiveMinutesAfterLaunch;
+      }).slice(0, 100); // Check up to 100 early transactions
+
+      logger.debug(`Found ${relevantSigs.length} transactions in first 5 minutes`);
+
+      // Parse each transaction to find buyers
+      for (const sig of relevantSigs) {
+        try {
+          const tx = await rateLimitedRPC(
+            () => this.connection.getParsedTransaction(
+              sig.signature,
+              { maxSupportedTransactionVersion: 0 }
+            ),
+            1
+          );
+
+          if (!tx || !tx.meta || tx.meta.err) continue;
+
+          // Extract buyers from this swap transaction
+          const buyers = this.extractBuyersFromSwap(tx, token.address);
+
+          for (const buyerAddress of buyers) {
+            earlyBuyers.push({
+              walletAddress: buyerAddress,
+              tokenAddress: token.address,
+              buyTime: sig.blockTime!,
+              buyPrice: token.launchPrice,
+              secondsAfterLaunch: sig.blockTime! - launchTime
+            });
+          }
+        } catch (error: any) {
+          logger.debug(`Error parsing pool tx: ${error.message}`);
+        }
+      }
+
+    } catch (error: any) {
+      logger.debug(`[Method 1: Pool] Error: ${error.message}`);
+    }
+
+    logger.debug(`[Method 1: Pool] Found ${earlyBuyers.length} early buyers for ${token.address.slice(0, 8)}...`);
+    return earlyBuyers;
+  }
+
+  /**
+   * Extract buyer wallet addresses from a DEX swap transaction
+   * Looks for wallets that had token balance increases
+   */
+  private extractBuyersFromSwap(tx: ParsedTransactionWithMeta, tokenAddress: string): string[] {
     const buyers: string[] = [];
 
     try {
-      // Look through post-token balances to find wallets that gained tokens
       const postBalances = tx.meta?.postTokenBalances || [];
       const preBalances = tx.meta?.preTokenBalances || [];
+
+      // Get the fee payer (transaction initiator) - this is usually the buyer
+      const feePayer = tx.transaction.message.accountKeys[0]?.pubkey.toBase58();
 
       for (const postBalance of postBalances) {
         if (postBalance.mint !== tokenAddress) continue;
@@ -493,31 +575,237 @@ export class WalletScanner {
           pre => pre.accountIndex === postBalance.accountIndex
         );
 
-        const preAmount = preBalance?.uiTokenAmount.uiAmount || 0;
-        const postAmount = postBalance.uiTokenAmount.uiAmount || 0;
+        const preAmount = preBalance?.uiTokenAmount?.uiAmount || 0;
+        const postAmount = postBalance.uiTokenAmount?.uiAmount || 0;
 
-        // If balance increased, this wallet bought
+        // Balance increased = this account received tokens (potential buyer)
         if (postAmount > preAmount) {
           const owner = postBalance.owner;
-          if (owner && !buyers.includes(owner)) {
-            buyers.push(owner);
+
+          // Skip if owner is a known program/pool address
+          if (owner && !this.isKnownProgramAddress(owner)) {
+            // Prefer the fee payer as the buyer, as they initiated the transaction
+            if (feePayer && !buyers.includes(feePayer)) {
+              buyers.push(feePayer);
+            } else if (!buyers.includes(owner)) {
+              buyers.push(owner);
+            }
           }
         }
       }
+
+      // If we didn't find buyers from token balances, use the fee payer
+      if (buyers.length === 0 && feePayer && !this.isKnownProgramAddress(feePayer)) {
+        buyers.push(feePayer);
+      }
+
     } catch (error: any) {
-      logger.debug('Error extracting buyers from transaction', { error: error.message });
+      logger.debug('Error extracting buyers from swap', { error: error.message });
     }
 
     return buyers;
   }
 
   /**
-   * Filter out wallets connected to token deployer (2-hop analysis)
+   * Check if an address is a known program or pool address (not a user wallet)
+   */
+  private isKnownProgramAddress(address: string): boolean {
+    const knownPrograms = [
+      DEX_PROGRAMS.RAYDIUM_AMM,
+      DEX_PROGRAMS.RAYDIUM_CLMM,
+      DEX_PROGRAMS.ORCA_WHIRLPOOL,
+      DEX_PROGRAMS.JUPITER_V6,
+      DEX_PROGRAMS.PUMP_FUN,
+      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // Token Program
+      'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', // Associated Token Program
+      '11111111111111111111111111111111', // System Program
+      'So11111111111111111111111111111111111111112', // Wrapped SOL
+    ];
+
+    return knownPrograms.includes(address);
+  }
+
+  /**
+   * Find buyers using Helius DAS API (Digital Asset Standard)
+   * This gets current token holders and checks when they first acquired
+   */
+  private async findBuyersFromHelius(token: TokenPerformance, apiKey: string): Promise<EarlyBuyer[]> {
+    const earlyBuyers: EarlyBuyer[] = [];
+
+    logger.debug(`[Method 2: Helius] Querying token holders for ${token.address.slice(0, 8)}...`);
+
+    try {
+      // Get token holders using Helius DAS API
+      const response = await this.fetchWithRetry(
+        `https://mainnet.helius-rpc.com/?api-key=${apiKey}`,
+        {
+          timeout: 15000,
+          method: 'POST',
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'helius-holders',
+            method: 'getTokenAccounts',
+            params: {
+              mint: token.address,
+              limit: 100,
+            }
+          }),
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+
+      if (!response.ok) {
+        logger.debug('Helius API request failed');
+        return [];
+      }
+
+      const data = await response.json() as any;
+      const tokenAccounts = data.result?.token_accounts || [];
+
+      logger.debug(`Found ${tokenAccounts.length} token holders via Helius`);
+
+      // For each holder, check when they first acquired the token (increased from 20 to 50)
+      for (const account of tokenAccounts.slice(0, 50)) {
+        const ownerAddress = account.owner;
+
+        // Get the owner's transaction history for this token
+        const ownerPubkey = new PublicKey(ownerAddress);
+        const ownerSigs = await rateLimitedRPC(
+          () => this.connection.getSignaturesForAddress(
+            ownerPubkey,
+            { limit: 50 },
+            'confirmed'
+          ),
+          0
+        );
+
+        // Find their first transaction within 5 minutes of launch
+        const earlyTx = ownerSigs.find(sig => {
+          if (!sig.blockTime) return false;
+          const secondsAfterLaunch = sig.blockTime - token.launchTime;
+          return secondsAfterLaunch >= 0 && secondsAfterLaunch <= 300;
+        });
+
+        if (earlyTx && earlyTx.blockTime) {
+          earlyBuyers.push({
+            walletAddress: ownerAddress,
+            tokenAddress: token.address,
+            buyTime: earlyTx.blockTime,
+            buyPrice: token.launchPrice,
+            secondsAfterLaunch: earlyTx.blockTime - token.launchTime
+          });
+        }
+      }
+
+    } catch (error: any) {
+      logger.debug(`[Method 2: Helius] Error: ${error.message}`);
+    }
+
+    logger.debug(`[Method 2: Helius] Found ${earlyBuyers.length} early buyers for ${token.address.slice(0, 8)}...`);
+    return earlyBuyers;
+  }
+
+  /**
+   * Fallback: Find buyers by looking for token transfer transactions
+   * Less accurate but works without specific pool address
+   */
+  private async findBuyersFromTransfers(token: TokenPerformance): Promise<EarlyBuyer[]> {
+    const earlyBuyers: EarlyBuyer[] = [];
+
+    logger.debug(`[Method 3: Transfers] Querying largest holders for ${token.address.slice(0, 8)}...`);
+
+    try {
+      // Get DexScreener data again to find any available transaction info
+      const response = await this.fetchWithRetry(
+        `https://api.dexscreener.com/latest/dex/tokens/${token.address}`,
+        { timeout: 10000 }
+      );
+
+      if (!response.ok) return [];
+
+      const data = await response.json() as { pairs?: any[] };
+      const mainPair = data.pairs?.[0];
+
+      if (!mainPair) return [];
+
+      // Try to get transactions from the pair's txns data
+      const txns = mainPair.txns?.h24 || {};
+      const buyCount = txns.buys || 0;
+
+      logger.debug(`DexScreener shows ${buyCount} buys in 24h for ${token.address.slice(0, 8)}...`);
+
+      // If there are recent buys, query the token mint for recent large holder activity
+      const tokenPubkey = new PublicKey(token.address);
+
+      // Get largest accounts for this token
+      const largestAccounts = await rateLimitedRPC(
+        () => this.connection.getTokenLargestAccounts(tokenPubkey),
+        1
+      );
+
+      // Check each large holder for early entry (increased from 10 to 30)
+      for (const account of largestAccounts.value.slice(0, 30)) {
+        try {
+          // Get the token account info to find the owner
+          const accountInfo = await rateLimitedRPC(
+            () => this.connection.getParsedAccountInfo(account.address),
+            0
+          );
+
+          const parsedData = (accountInfo.value?.data as any)?.parsed;
+          const owner = parsedData?.info?.owner;
+
+          if (!owner || this.isKnownProgramAddress(owner)) continue;
+
+          // Check if this owner made early transactions
+          const ownerPubkey = new PublicKey(owner);
+          const ownerSigs = await rateLimitedRPC(
+            () => this.connection.getSignaturesForAddress(
+              ownerPubkey,
+              { limit: 30 },
+              'confirmed'
+            ),
+            0
+          );
+
+          // Find early transaction
+          const earlyTx = ownerSigs.find(sig => {
+            if (!sig.blockTime) return false;
+            const secondsAfterLaunch = sig.blockTime - token.launchTime;
+            return secondsAfterLaunch >= 0 && secondsAfterLaunch <= 300;
+          });
+
+          if (earlyTx && earlyTx.blockTime) {
+            earlyBuyers.push({
+              walletAddress: owner,
+              tokenAddress: token.address,
+              buyTime: earlyTx.blockTime,
+              buyPrice: token.launchPrice,
+              secondsAfterLaunch: earlyTx.blockTime - token.launchTime
+            });
+          }
+        } catch (error: any) {
+          logger.debug(`Error checking holder: ${error.message}`);
+        }
+      }
+
+    } catch (error: any) {
+      logger.debug(`[Method 3: Transfers] Error: ${error.message}`);
+    }
+
+    logger.debug(`[Method 3: Transfers] Found ${earlyBuyers.length} early buyers for ${token.address.slice(0, 8)}...`);
+    return earlyBuyers;
+  }
+
+
+  /**
+   * Filter out wallets connected to token deployer (1-hop analysis only)
+   * RELAXED: Now only checks direct deployer connections (1 hop instead of 2)
+   * to avoid false positives from common funding sources
    *
    * Removes wallets that:
    * - Are the deployer
-   * - Received SOL/tokens from deployer
-   * - Received from wallets funded by deployer
+   * - Received SOL/tokens DIRECTLY from deployer
    */
   private async filterDeployerConnectedWallets(
     buyers: EarlyBuyer[],
@@ -525,25 +813,40 @@ export class WalletScanner {
   ): Promise<EarlyBuyer[]> {
     logger.debug(`Filtering deployer-connected wallets (${buyers.length} buyers)`);
 
+    // If we have very few buyers, skip filtering to preserve data
+    if (buyers.length <= 3) {
+      logger.debug('Skipping deployer filter - too few buyers to filter');
+      return buyers;
+    }
+
     try {
       // Get token deployer address
       const deployer = await this.getTokenDeployer(tokenAddress);
       if (!deployer) {
-        logger.warn('Could not identify deployer, skipping deployer filter');
+        logger.debug('Could not identify deployer, skipping deployer filter');
         return buyers;
       }
 
-      // Build connection graph (2 hops deep)
-      const connectionGraph = await this.buildConnectionGraph(deployer, 2);
+      // RELAXED: Only check 1 hop (direct connection) instead of 2
+      const connectionGraph = await this.buildConnectionGraph(deployer, 1);
 
-      // Filter out connected wallets
+      // Filter out directly connected wallets AND the deployer
       const cleanBuyers = buyers.filter(buyer => {
-        return !connectionGraph.has(buyer.walletAddress);
+        const isConnected = connectionGraph.has(buyer.walletAddress);
+        const isDeployer = buyer.walletAddress === deployer;
+        // Keep wallets that are NOT connected AND NOT the deployer
+        return !isConnected && !isDeployer;
       });
 
       const removedCount = buyers.length - cleanBuyers.length;
       if (removedCount > 0) {
         logger.info(`Removed ${removedCount} deployer-connected wallets`);
+      }
+
+      // SAFETY: Never remove more than 50% of buyers
+      if (cleanBuyers.length < buyers.length * 0.5) {
+        logger.warn('Deployer filter removed too many - keeping more buyers');
+        return buyers.slice(0, Math.max(cleanBuyers.length, Math.ceil(buyers.length * 0.5)));
       }
 
       return cleanBuyers;
@@ -562,11 +865,11 @@ export class WalletScanner {
     try {
       const tokenPubkey = new PublicKey(tokenAddress);
 
-      // Get token account creation signature (reduced limit)
+      // Get token account creation signature (increased for better deployer detection)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           tokenPubkey,
-          { limit: 100 }, // Reduced from 1000
+          { limit: 300 },
           'confirmed'
         ),
         1 // Medium priority
@@ -649,18 +952,18 @@ export class WalletScanner {
       const pubkey = new PublicKey(walletAddress);
       const recipients = new Set<string>();
 
-      // Get recent signatures (reduced limit)
+      // Get recent signatures (increased for better connection detection)
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           pubkey,
-          { limit: 50 }, // Reduced from 100
+          { limit: 100 },
           'confirmed'
         ),
         0 // Lower priority
       );
 
-      // Check only first 10 transactions (reduced from 20)
-      for (const sig of signatures.slice(0, 10)) {
+      // Check first 25 transactions for connection detection
+      for (const sig of signatures.slice(0, 25)) {
         try {
           const tx = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
@@ -726,43 +1029,43 @@ export class WalletScanner {
 
   /**
    * Check if wallet exhibits bot behavior
-   * Rate-limited and optimized to reduce RPC calls
+   * RELAXED: Less aggressive detection to avoid false positives
+   * Only flags OBVIOUS bots - errs on side of keeping wallets
    */
   private async isBotWallet(walletAddress: string): Promise<boolean> {
     try {
       const pubkey = new PublicKey(walletAddress);
 
-      // Get recent transaction history (reduced limit)
+      // Get recent transaction history
       const signatures = await rateLimitedRPC(
         () => this.connection.getSignaturesForAddress(
           pubkey,
-          { limit: 50 }, // Reduced from 100
+          { limit: 30 },
           'confirmed'
         ),
         0 // Lower priority
       );
 
-      if (signatures.length < 10) return false; // Not enough data
+      // RELAXED: Need more data to make bot determination
+      if (signatures.length < 15) return false;
 
       let quickSellCount = 0;
       let totalTrades = 0;
-      let sandwichPatterns = 0;
-      let frontrunPatterns = 0;
       let atomicArbPatterns = 0;
 
       // Track buy/sell pairs for quick sell detection
-      const tokenBuys: Map<string, number> = new Map(); // token -> buyTime
-      const slotCounts: Map<number, number> = new Map(); // slot -> txCount
+      const tokenBuys: Map<string, number> = new Map();
+      const slotCounts: Map<number, number> = new Map();
 
-      // Analyze transaction patterns (reduced from 50 to 15 transactions)
-      for (const sig of signatures.slice(0, 15)) {
+      // Analyze fewer transactions to reduce RPC load
+      for (const sig of signatures.slice(0, 10)) {
         try {
           const tx = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
               sig.signature,
               { maxSupportedTransactionVersion: 0 }
             ),
-            0 // Lower priority
+            0
           );
 
           if (!tx || !tx.meta) continue;
@@ -784,17 +1087,17 @@ export class WalletScanner {
 
           // Known DEX program IDs
           const dexPrograms = [
-            '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM
-            'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', // Orca Whirlpools
-            'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', // Jupiter
+            DEX_PROGRAMS.RAYDIUM_AMM,
+            DEX_PROGRAMS.ORCA_WHIRLPOOL,
+            DEX_PROGRAMS.JUPITER_V6,
           ];
 
           const dexInteractions = dexPrograms.filter(p => programIds.has(p)).length;
-          if (dexInteractions >= 2) {
+          if (dexInteractions >= 3) { // RAISED threshold from 2 to 3
             atomicArbPatterns++;
           }
 
-          // Check token balance changes for buy/sell detection
+          // Check token balance changes
           const preBalances = tx.meta.preTokenBalances || [];
           const postBalances = tx.meta.postTokenBalances || [];
 
@@ -809,12 +1112,11 @@ export class WalletScanner {
             const postAmount = parseInt(post.uiTokenAmount?.amount || '0');
 
             if (postAmount > preAmount) {
-              // Buy detected
               tokenBuys.set(post.mint, sig.blockTime || Date.now() / 1000);
             } else if (preAmount > postAmount && sig.blockTime) {
-              // Sell detected - check if quick sell
               const buyTime = tokenBuys.get(post.mint);
-              if (buyTime && (sig.blockTime - buyTime) < 300) { // < 5 minutes
+              // RELAXED: Only count as quick sell if < 2 minutes (was 5)
+              if (buyTime && (sig.blockTime - buyTime) < 120) {
                 quickSellCount++;
               }
             }
@@ -826,44 +1128,23 @@ export class WalletScanner {
         }
       }
 
-      // Detect sandwich attack pattern: multiple txs in same slot
-      for (const [, count] of slotCounts) {
-        if (count >= 2) {
-          sandwichPatterns++;
-        }
-      }
+      // RELAXED thresholds - only flag OBVIOUS bots
 
-      // Detect frontrunning: consistently enters 1-2 slots before large trades
-      // Check for abnormally high frequency trading
-      const avgTxPerSlot = signatures.length / Math.max(slotCounts.size, 1);
-      if (avgTxPerSlot > 1.5) {
-        frontrunPatterns = Math.floor(avgTxPerSlot);
-      }
-
-      // If more than 80% are quick sells, likely a dump bot
+      // If more than 90% are quick sells (was 80%), likely a dump bot
       const quickSellRate = quickSellCount / Math.max(totalTrades, 1);
-      if (quickSellRate > 0.8) {
-        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as dump bot (${(quickSellRate * 100).toFixed(0)}% quick sells)`);
+      if (quickSellRate > 0.9 && quickSellCount >= 5) {
+        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... flagged as dump bot (${(quickSellRate * 100).toFixed(0)}% quick sells)`);
         return true;
       }
 
-      // If atomic arbitrage pattern detected frequently (adjusted threshold)
-      if (atomicArbPatterns >= 2) {
-        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as atomic arb bot (${atomicArbPatterns} patterns)`);
+      // If atomic arbitrage detected very frequently (raised from 2 to 4)
+      if (atomicArbPatterns >= 4) {
+        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... flagged as atomic arb bot (${atomicArbPatterns} patterns)`);
         return true;
       }
 
-      // If sandwich patterns detected (adjusted threshold)
-      if (sandwichPatterns >= 3) {
-        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as sandwich bot (${sandwichPatterns} patterns)`);
-        return true;
-      }
-
-      // If high frequency trading pattern
-      if (frontrunPatterns >= 3 && totalTrades > 10) {
-        logger.debug(`Wallet ${walletAddress.slice(0, 8)}... identified as frontrun bot (${frontrunPatterns} avg tx/slot)`);
-        return true;
-      }
+      // REMOVED: Sandwich and frontrun detection - too many false positives
+      // Regular traders can have multiple txs in same slot legitimately
 
       return false;
 
@@ -899,13 +1180,13 @@ export class WalletScanner {
           // Insert new wallet as Tier 3 (unproven, needs scoring)
           await query(
             `INSERT INTO smart_wallets
-             (address, tier, score, win_rate, average_return, tokens_entered, last_active, total_trades, successful_trades, average_hold_time, is_active)
-             VALUES ($1, 3, 0, 0, 0, 1, NOW(), 0, 0, 0, true)
+             (id, address, tier, score, win_rate, average_return, tokens_entered, last_active, total_trades, successful_trades, average_hold_time, is_active, created_at, updated_at)
+             VALUES ($1, $2, 3, 0, 0, 0, 1, NOW(), 0, 0, 0, true, NOW(), NOW())
              ON CONFLICT (address) DO UPDATE
              SET tokens_entered = smart_wallets.tokens_entered + 1,
                  last_active = NOW(),
                  updated_at = NOW()`,
-            [buyer.walletAddress]
+            [randomUUID(), buyer.walletAddress]
           );
         }
 
@@ -940,5 +1221,35 @@ export class WalletScanner {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Get Helius API key from environment
+   * Checks HELIUS_API_KEY first, then extracts from SOLANA_RPC_PRIMARY URL
+   */
+  private getHeliusApiKey(): string | null {
+    // Check explicit HELIUS_API_KEY first
+    if (process.env.HELIUS_API_KEY) {
+      return process.env.HELIUS_API_KEY;
+    }
+
+    // Try to extract from RPC URLs
+    const rpcUrls = [
+      process.env.SOLANA_RPC_PRIMARY,
+      process.env.SOLANA_RPC_SECONDARY,
+      process.env.SOLANA_RPC_TERTIARY,
+    ];
+
+    for (const url of rpcUrls) {
+      if (url && url.includes('helius')) {
+        // Extract api-key from URL like: https://mainnet.helius-rpc.com/?api-key=xxx
+        const match = url.match(/api-key=([a-zA-Z0-9-]+)/);
+        if (match && match[1]) {
+          return match[1];
+        }
+      }
+    }
+
+    return null;
   }
 }
