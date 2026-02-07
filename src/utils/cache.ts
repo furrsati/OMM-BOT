@@ -12,7 +12,7 @@ class CacheManager {
   private cleanupIntervalId: NodeJS.Timeout | null = null;
 
   // Memory management - prevent unbounded cache growth
-  private readonly MAX_MEMORY_CACHE_SIZE = 1000; // Increased for 2GB RAM instances
+  private readonly MAX_MEMORY_CACHE_SIZE = 400; // Proportional for 2GB RAM (200 * 2)
 
   async initialize(): Promise<void> {
     try {

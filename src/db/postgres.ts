@@ -46,7 +46,7 @@ export function initializePostgres(): Pool {
 
   pool = new Pool({
     connectionString,
-    max: parseInt(process.env.DB_POOL_SIZE || '10', 10), // Reduced for 512MB Render instances
+    max: parseInt(process.env.DB_POOL_SIZE || '5', 10), // Reduced for memory efficiency
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000, // 10 seconds - more resilient for cold starts
     ssl: sslConfig,
