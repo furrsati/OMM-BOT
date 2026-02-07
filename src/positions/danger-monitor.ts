@@ -12,7 +12,7 @@
  */
 
 import { Connection, PublicKey } from '@solana/web3.js';
-import { getMint, getAccount, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { getMint, getAccount } from '@solana/spl-token';
 import { logger } from '../utils/logger';
 import { rateLimitedRPC } from '../utils/rate-limiter';
 import { PositionData } from './position-tracker';
@@ -507,39 +507,24 @@ export class DangerMonitor {
 
   /**
    * Get current holder count for a token
+   * FIXED: Use getTokenLargestAccounts instead of getProgramAccounts
+   * getProgramAccounts fetches ALL holders (50-100MB for popular tokens!)
+   * getTokenLargestAccounts fetches only top 20 (~5KB)
    */
   private async getHolderCount(tokenAddress: string): Promise<number> {
     try {
       const mintPubkey = new PublicKey(tokenAddress);
 
-      // Get all token accounts for this mint
-      const tokenAccounts = await rateLimitedRPC(
-        () => this.connection.getProgramAccounts(
-          TOKEN_PROGRAM_ID,
-          {
-            filters: [
-              { dataSize: 165 }, // Token account size
-              {
-                memcmp: {
-                  offset: 0, // Mint is at offset 0
-                  bytes: mintPubkey.toBase58()
-                }
-              }
-            ]
-          }
-        ),
+      // Use getTokenLargestAccounts - returns max 20 accounts (~5KB vs 50-100MB)
+      const largestAccounts = await rateLimitedRPC(
+        () => this.connection.getTokenLargestAccounts(mintPubkey),
         5 // medium-high priority - danger monitoring is important
       );
 
       // Count accounts with non-zero balance
-      let holderCount = 0;
-      for (const account of tokenAccounts) {
-        // Balance is at offset 64, 8 bytes little-endian
-        const balance = account.account.data.readBigUInt64LE(64);
-        if (balance > 0n) {
-          holderCount++;
-        }
-      }
+      const holderCount = largestAccounts.value.filter(a =>
+        a.uiAmount && a.uiAmount > 0
+      ).length;
 
       return holderCount;
     } catch (error: any) {

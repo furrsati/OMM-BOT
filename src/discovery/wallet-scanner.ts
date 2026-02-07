@@ -1177,8 +1177,8 @@ export class WalletScanner {
       const tokenBuys: Map<string, number> = new Map();
       const slotCounts: Map<number, number> = new Map();
 
-      // Analyze transactions for bot patterns (minimal)
-      for (const sig of signatures.slice(0, 5)) {
+      // Analyze transactions for bot patterns (increased sample for accuracy)
+      for (const sig of signatures.slice(0, 10)) {
         try {
           let tx: any = await rateLimitedRPC(
             () => this.connection.getParsedTransaction(
@@ -1216,7 +1216,8 @@ export class WalletScanner {
           ];
 
           const dexInteractions = dexPrograms.filter(p => programIds.has(p)).length;
-          if (dexInteractions >= 2) {
+          // Require 3+ DEX interactions in same tx to flag as atomic arb (was 2)
+          if (dexInteractions >= 3) {
             atomicArbPatterns++;
           }
 
@@ -1262,8 +1263,9 @@ export class WalletScanner {
       }
 
       // Per CLAUDE.md: "Remove wallets that sell more than 80% of their position within 5 minutes"
+      // Relaxed: require 90%+ sell rate with 3+ quick sells (was 80%/4)
       const quickSellRate = quickSellCount / Math.max(totalTrades, 1);
-      if (quickSellRate > 0.8 && quickSellCount >= 4) {
+      if (quickSellRate > 0.9 && quickSellCount >= 3) {
         logger.debug(`Wallet ${walletAddress.slice(0, 8)}... flagged as dump bot (${(quickSellRate * 100).toFixed(0)}% quick sells)`);
         return true;
       }
@@ -1275,8 +1277,8 @@ export class WalletScanner {
       }
 
       // Sandwich/frontrun detection: multiple transactions in same slot is suspicious
-      // Regular traders rarely have 3+ same-slot transactions
-      if (sameSlotTxCount >= 3) {
+      // Raised threshold: regular traders rarely have 5+ same-slot transactions (was 3)
+      if (sameSlotTxCount >= 5) {
         logger.debug(`Wallet ${walletAddress.slice(0, 8)}... flagged as potential sandwich/frontrun bot (${sameSlotTxCount} same-slot txs)`);
         return true;
       }

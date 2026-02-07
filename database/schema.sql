@@ -4,6 +4,18 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- =====================================================
+-- TRIGGER FUNCTION FOR UPDATED_AT
+-- Must be defined before any table that uses it
+-- =====================================================
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =====================================================
 -- SMART WALLETS TABLE
 -- =====================================================
 CREATE TABLE smart_wallets (
@@ -94,7 +106,7 @@ CREATE INDEX idx_trades_profit_loss ON trades(profit_loss DESC);
 CREATE TABLE blacklist (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   address VARCHAR(44) NOT NULL UNIQUE,
-  type VARCHAR(20) NOT NULL CHECK (type IN ('wallet', 'contract')),
+  type VARCHAR(20) NOT NULL CHECK (type IN ('wallet', 'contract', 'deployer')),
   reason TEXT NOT NULL,
   depth INT NOT NULL DEFAULT 0,
   evidence JSONB DEFAULT '{}',
@@ -211,7 +223,7 @@ CREATE TRIGGER update_positions_updated_at BEFORE UPDATE ON positions
 -- =====================================================
 CREATE TABLE alerts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  level VARCHAR(20) NOT NULL CHECK (level IN ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW')),
+  level VARCHAR(20) NOT NULL CHECK (level IN ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'critical', 'error', 'warning', 'info')),
   type VARCHAR(50) NOT NULL,
   message TEXT NOT NULL,
   data JSONB DEFAULT '{}',
@@ -229,8 +241,8 @@ CREATE INDEX idx_alerts_created_at ON alerts(created_at DESC);
 CREATE TABLE audit_log (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   action VARCHAR(100) NOT NULL,
-  details JSONB NOT NULL,
-  checksum VARCHAR(64) NOT NULL,
+  details JSONB DEFAULT '{}',
+  checksum VARCHAR(64),
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -258,14 +270,6 @@ CREATE INDEX idx_price_history_token ON price_history(token_address, time DESC);
 -- =====================================================
 -- TRIGGERS FOR UPDATED_AT
 -- =====================================================
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
 CREATE TRIGGER update_smart_wallets_updated_at BEFORE UPDATE ON smart_wallets
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 

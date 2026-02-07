@@ -234,15 +234,16 @@ export class SignalTracker {
       // Process new token discoveries
       for (const [tokenAddress, data] of tokenPurchases) {
         try {
-          // PRE-FILTER: Skip tokens with only Tier 3 wallet interest
-          // Require at least one Tier 1 or Tier 2 wallet, OR 2+ wallets total
+          // PRE-FILTER: Skip tokens with insufficient wallet interest
+          // Require at least one Tier 1 or Tier 2 wallet, OR 2+ wallets total, OR 3+ Tier 3 wallets
           const tier1Count = data.walletTiers.filter(t => t === 1).length;
           const tier2Count = data.walletTiers.filter(t => t === 2).length;
           const hasQualityWallet = tier1Count > 0 || tier2Count > 0;
           const hasMultipleWallets = data.walletAddresses.length >= 2;
+          const hasTier3Cluster = data.walletAddresses.length >= 3; // Allow 3+ Tier 3 wallets as valid signal
 
-          if (!hasQualityWallet && !hasMultipleWallets) {
-            logger.debug(`Skipping ${tokenAddress.slice(0, 8)} - only Tier 3 wallets (${data.walletAddresses.length})`);
+          if (!hasQualityWallet && !hasMultipleWallets && !hasTier3Cluster) {
+            logger.debug(`Skipping ${tokenAddress.slice(0, 8)} - only ${data.walletAddresses.length} Tier 3 wallet(s)`);
             continue;
           }
 
@@ -282,7 +283,7 @@ export class SignalTracker {
   }
 
   /**
-   * Get recent token purchases from a wallet (last 30 minutes)
+   * Get recent token purchases from a wallet (last 60 minutes)
    */
   private async getRecentTokenPurchases(walletAddress: string): Promise<Array<{
     tokenAddress: string;
@@ -293,7 +294,7 @@ export class SignalTracker {
 
     try {
       const pubkey = new PublicKey(walletAddress);
-      const thirtyMinutesAgo = Math.floor(Date.now() / 1000) - 1800;
+      const sixtyMinutesAgo = Math.floor(Date.now() / 1000) - 3600;
 
       // Get recent transaction signatures
       const signatures = await rateLimitedRPC(
@@ -307,7 +308,7 @@ export class SignalTracker {
 
       // Filter to recent transactions only
       const recentSigs = signatures.filter(sig =>
-        sig.blockTime && sig.blockTime >= thirtyMinutesAgo
+        sig.blockTime && sig.blockTime >= sixtyMinutesAgo
       );
 
       for (const sig of recentSigs.slice(0, 10)) {
@@ -650,6 +651,18 @@ export class SignalTracker {
         if (opportunity.status === 'WATCHING' && dipDepth >= 20 && dipDepth <= 35) {
           if (tier1Count >= 1 || tier2Count >= 2) {
             logger.info(`🎯 SECONDARY ENTRY: ${tokenAddress.slice(0, 8)}... (${dipDepth.toFixed(1)}% dip, ${tier1Count}T1/${tier2Count}T2)`);
+            opportunity.status = 'READY';
+            await this.evaluateEntry(opportunity);
+            continue;
+          }
+        }
+
+        // ENTRY TRIGGER 4: Tier 3 Cluster (3+ Tier 3 wallets + dip)
+        // Allows signals from Tier 3 wallets when multiple enter the same token
+        if (opportunity.status === 'WATCHING' && dipDepth >= 20 && dipDepth <= 35) {
+          const tier3Count = opportunity.smartWalletTiers.filter(t => t === 3).length;
+          if (tier3Count >= 3) {
+            logger.info(`🎯 TIER 3 CLUSTER: ${tokenAddress.slice(0, 8)}... (${dipDepth.toFixed(1)}% dip, ${tier3Count} Tier 3 wallets)`);
             opportunity.status = 'READY';
             await this.evaluateEntry(opportunity);
             continue;

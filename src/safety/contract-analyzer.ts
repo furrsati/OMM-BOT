@@ -278,6 +278,9 @@ export class ContractAnalyzer {
 
   /**
    * Analyze holder distribution
+   * FIXED: Use getTokenLargestAccounts instead of getProgramAccounts
+   * getProgramAccounts fetches ALL holders (50-100MB for popular tokens!)
+   * getTokenLargestAccounts fetches only top 20 (~5KB) - sufficient for safety analysis
    */
   private async analyzeHolderDistribution(tokenAddress: string): Promise<{
     topHolderPercent: number;
@@ -292,59 +295,23 @@ export class ContractAnalyzer {
       );
       const totalSupply = Number(mintInfo.supply);
 
-      // Get all token accounts for this mint
-      const accounts = await rateLimitedRPC(
-        () => this.connection.getProgramAccounts(
-          TOKEN_PROGRAM_ID,
-          {
-            filters: [
-              { dataSize: 165 }, // Token account size
-              {
-                memcmp: {
-                  offset: 0,
-                  bytes: tokenPubkey.toBase58()
-                }
-              }
-            ]
-          }
-        ),
+      // Use getTokenLargestAccounts - returns max 20 accounts (~5KB vs 50-100MB)
+      // This is sufficient for safety analysis (detecting concentration)
+      const largestAccounts = await rateLimitedRPC(
+        () => this.connection.getTokenLargestAccounts(tokenPubkey),
         3 // lower priority - background analysis
       );
 
-      // Parse balances
-      const balances: { owner: string; amount: number }[] = [];
+      // Filter out zero balances and get amounts
+      const balances = largestAccounts.value
+        .filter(a => a.uiAmount && a.uiAmount > 0)
+        .map(a => ({
+          amount: Number(a.amount),
+          uiAmount: a.uiAmount || 0
+        }));
 
-      for (const account of accounts) {
-        try {
-          // Parse token account data
-          const data = account.account.data;
-
-          // Token amount is at offset 64-72 (8 bytes, little-endian)
-          const amount = data.readBigUInt64LE(64);
-
-          // Owner is at offset 32-64 (32 bytes)
-          const ownerBytes = data.slice(32, 64);
-          const owner = new PublicKey(ownerBytes).toBase58();
-
-          // Skip safe addresses and zero balances
-          if (this.SAFE_ADDRESSES.has(owner) || amount === 0n) {
-            continue;
-          }
-
-          balances.push({
-            owner,
-            amount: Number(amount)
-          });
-        } catch (parseError) {
-          // Skip accounts that fail to parse
-          continue;
-        }
-      }
-
-      // Sort by balance descending
-      balances.sort((a, b) => b.amount - a.amount);
-
-      const holderCount = balances.length;
+      // Already sorted by balance descending from RPC
+      const holderCount = balances.length; // At least this many holders (up to 20)
 
       // Calculate top holder percentage
       const topHolderAmount = balances[0]?.amount || 0;
@@ -569,6 +536,8 @@ export class ContractAnalyzer {
 
   /**
    * Check if LP tokens are locked or burned
+   * FIXED: Use getTokenLargestAccounts instead of getProgramAccounts
+   * LP tokens usually have very few holders, so top 20 is sufficient
    */
   private async checkLPTokenLock(lpMint: string): Promise<{
     locked: boolean;
@@ -586,45 +555,37 @@ export class ContractAnalyzer {
         return { locked: false, holders: [] };
       }
 
-      // Get all LP token holders
-      const accounts = await rateLimitedRPC(
-        () => this.connection.getProgramAccounts(
-          TOKEN_PROGRAM_ID,
-          {
-            filters: [
-              { dataSize: 165 },
-              {
-                memcmp: {
-                  offset: 0,
-                  bytes: lpMintPubkey.toBase58()
-                }
-              }
-            ]
-          }
-        ),
+      // Use getTokenLargestAccounts - LP tokens usually have <20 holders
+      const largestAccounts = await rateLimitedRPC(
+        () => this.connection.getTokenLargestAccounts(lpMintPubkey),
         2
       );
 
       const holders: string[] = [];
       let burnedOrLockedAmount = 0;
 
-      for (const account of accounts) {
-        try {
-          const data = account.account.data;
-          const amount = Number(data.readBigUInt64LE(64));
-          const owner = new PublicKey(data.slice(32, 64)).toBase58();
+      // For each account, we need to get the owner address
+      for (const account of largestAccounts.value) {
+        if (!account.uiAmount || account.uiAmount === 0) continue;
 
-          if (amount === 0) continue;
+        try {
+          // Fetch the account info to get the owner
+          const accountInfo = await rateLimitedRPC(
+            () => this.connection.getParsedAccountInfo(account.address),
+            2
+          );
+
+          const parsedData = (accountInfo.value?.data as any)?.parsed;
+          const owner = parsedData?.info?.owner;
+
+          if (!owner) continue;
 
           holders.push(owner);
 
           // Check if this is a burn address
           if (this.isBurnAddress(owner)) {
-            burnedOrLockedAmount += amount;
+            burnedOrLockedAmount += Number(account.amount);
           }
-
-          // Check if owner has no transfer authority (locked)
-          // This is a simplified check - in production, you'd check locker contracts
         } catch {
           continue;
         }

@@ -174,6 +174,7 @@ async function main() {
     }, 5 * 60 * 1000); // 5 minutes
 
     // Memory monitoring - check every 15 seconds for better response
+    // THRESHOLDS LOWERED for 512MB Render instances (was 250/350/450, now 150/250/350)
     memoryMonitorInterval = setInterval(() => {
       const usage = process.memoryUsage();
       const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
@@ -183,8 +184,8 @@ async function main() {
       // Log memory usage periodically
       logger.debug('Memory check', { heapUsedMB, heapTotalMB, rssMB });
 
-      // EARLY WARNING: At 250MB, start proactive cleanup
-      if (rssMB > 250 && rssMB <= 350) {
+      // EARLY WARNING: At 150MB (was 250), start proactive cleanup
+      if (rssMB > 150 && rssMB <= 250) {
         logger.info('⚠️ Memory pressure detected, triggering cleanup', { heapUsedMB, rssMB });
 
         // Trigger cleanup on components that support it
@@ -201,8 +202,8 @@ async function main() {
         }
       }
 
-      // HIGH PRESSURE: At 350MB, aggressive cleanup
-      if (rssMB > 350 && rssMB <= 450) {
+      // HIGH PRESSURE: At 250MB (was 350), aggressive cleanup
+      if (rssMB > 250 && rssMB <= 350) {
         logger.warn('🚨 HIGH MEMORY PRESSURE - aggressive cleanup', {
           heapUsedMB,
           heapTotalMB,
@@ -227,8 +228,8 @@ async function main() {
         }
       }
 
-      // CRITICAL: At 450MB+, emergency mode
-      if (rssMB > 450) {
+      // CRITICAL: At 350MB+ (was 450), emergency mode
+      if (rssMB > 350) {
         logger.error('🚨 CRITICAL MEMORY - emergency cleanup', { rssMB });
 
         // Clear cache manager
@@ -243,7 +244,7 @@ async function main() {
           logger.info('Forced triple garbage collection');
         }
       }
-    }, 15 * 1000); // Check every 15 seconds (was 30)
+    }, 15 * 1000); // Check every 15 seconds
 
     // Database archival - clean up old patterns and trades daily
     archivalInterval = setInterval(async () => {

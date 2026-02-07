@@ -7,7 +7,7 @@
 -- =====================================================
 CREATE TABLE IF NOT EXISTS bot_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  level VARCHAR(10) NOT NULL CHECK (level IN ('debug', 'info', 'warn', 'error')),
+  level VARCHAR(20) NOT NULL CHECK (level IN ('debug', 'info', 'warn', 'error', 'DEBUG', 'INFO', 'WARN', 'ERROR')),
   category VARCHAR(50),
   message TEXT NOT NULL,
   data JSONB DEFAULT '{}',
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS token_opportunities (
   conviction_breakdown JSONB DEFAULT '{}',
 
   -- Decision
-  status VARCHAR(20) DEFAULT 'ANALYZING' CHECK (status IN ('ANALYZING', 'QUALIFIED', 'REJECTED', 'ENTERED', 'EXPIRED')),
+  status VARCHAR(20) DEFAULT 'ANALYZING' CHECK (status IN ('PENDING', 'ANALYZING', 'QUALIFIED', 'REJECTED', 'ENTERED', 'MISSED', 'EXPIRED')),
   rejection_reason TEXT,
   decision_time TIMESTAMP,
 
@@ -86,14 +86,14 @@ CREATE INDEX IF NOT EXISTS idx_token_opportunities_expires ON token_opportunitie
 -- =====================================================
 CREATE TABLE IF NOT EXISTS execution_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  type VARCHAR(20) NOT NULL CHECK (type IN ('buy', 'sell', 'emergency')),
+  type VARCHAR(20) NOT NULL CHECK (type IN ('buy', 'sell', 'emergency', 'BUY', 'SELL', 'EMERGENCY')),
   token_address VARCHAR(44) NOT NULL,
   token_symbol VARCHAR(20),
   amount DECIMAL(18, 6),
   price DECIMAL(18, 9),
   value_usd DECIMAL(18, 2),
   signature VARCHAR(100),
-  status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'failed')),
+  status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'failed', 'PENDING', 'SUCCESS', 'FAILED')),
   latency_ms INT,
   slippage_percent DECIMAL(5, 2),
   priority_fee DECIMAL(18, 9),
@@ -146,7 +146,7 @@ ALTER TABLE alerts ADD CONSTRAINT alerts_level_check
 CREATE TABLE IF NOT EXISTS blacklist (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   address VARCHAR(44) NOT NULL UNIQUE,
-  type VARCHAR(20) NOT NULL CHECK (type IN ('wallet', 'contract')),
+  type VARCHAR(20) NOT NULL CHECK (type IN ('wallet', 'contract', 'deployer')),
   reason TEXT NOT NULL,
   depth INT NOT NULL DEFAULT 0,
   evidence JSONB DEFAULT '{}',
