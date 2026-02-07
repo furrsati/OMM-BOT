@@ -14,6 +14,7 @@ import { SafetyScorer } from '../../safety';
 import { EntryDecisionEngine } from '../../conviction';
 import { LearningScheduler } from '../../learning';
 import { AlertManager, KillSwitch } from '../../alerts';
+import { PaperTradingEngine } from '../../paper-trading';
 
 export interface BotContext {
   // Core Components
@@ -28,6 +29,9 @@ export interface BotContext {
   learningScheduler: LearningScheduler;
   alertManager: AlertManager;
   killSwitch: KillSwitch;
+
+  // Paper Trading
+  paperTradingEngine?: PaperTradingEngine;
 
   // Bot State
   startTime: Date;

@@ -16,10 +16,67 @@ import { ExecutionManager, BuyExecutor, SellExecutor, JupiterClient, Transaction
 import { AlertManager, TelegramClient, DiscordClient, KillSwitch, TelegramCommands } from './alerts';
 import { PositionManager } from './positions';
 import { APIServer, botContextManager } from './api';
+import { PaperTradingEngine } from './paper-trading';
 import bs58 from 'bs58';
 
 // Load environment variables
 dotenv.config();
+
+// ============================================================
+// GLOBAL ERROR HANDLERS - Prevent random shutdowns
+// ============================================================
+
+// Track if we're already handling a fatal error to prevent double-exit
+let isHandlingFatalError = false;
+
+// Handle uncaught exceptions - log and attempt graceful restart
+process.on('uncaughtException', (error: Error) => {
+  logger.error('🚨 UNCAUGHT EXCEPTION - Bot will attempt to continue', {
+    error: error.message,
+    stack: error.stack,
+    name: error.name
+  });
+
+  // For truly fatal errors, exit and let PM2 restart
+  if (error.message.includes('FATAL') ||
+      error.message.includes('out of memory') ||
+      error.message.includes('heap out of memory')) {
+    if (!isHandlingFatalError) {
+      isHandlingFatalError = true;
+      logger.error('🛑 Fatal error detected, exiting for process manager restart');
+      process.exit(1);
+    }
+  }
+  // Otherwise, continue running - the error is logged
+});
+
+// Handle unhandled promise rejections - convert to warnings instead of crashes
+process.on('unhandledRejection', (reason: any, _promise: Promise<any>) => {
+  logger.error('🚨 UNHANDLED PROMISE REJECTION - Bot will continue', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined
+  });
+  // Don't exit - just log and continue
+});
+
+// Handle warnings
+process.on('warning', (warning: Error) => {
+  logger.warn('⚠️ Node.js Warning', {
+    name: warning.name,
+    message: warning.message,
+    stack: warning.stack
+  });
+});
+
+// Handle SIGPIPE (broken pipe) - common in long-running processes
+process.on('SIGPIPE', () => {
+  logger.warn('⚠️ SIGPIPE received - continuing');
+});
+
+// Handle SIGHUP (terminal disconnect) - continue running
+process.on('SIGHUP', () => {
+  logger.info('📡 SIGHUP received - bot continues running in background');
+});
 
 /**
  * Main entry point for the Solana Memecoin Trading Bot V3.0
@@ -69,6 +126,7 @@ async function main() {
   let apiServer: APIServer | undefined;
   let socialIntelligence: OnChainSocialIntelligence | undefined;
   let hypeDetector: HypeDetector | undefined;
+  let paperTradingEngine: PaperTradingEngine | undefined;
 
   // Track intervals for proper cleanup (memory leak prevention)
   let cacheCleanupInterval: NodeJS.Timeout | undefined;
@@ -174,7 +232,7 @@ async function main() {
     }, 5 * 60 * 1000); // 5 minutes
 
     // Memory monitoring - check every 15 seconds for faster response
-    // THRESHOLDS for 2GB RAM instances - maintain ~30/50/70% ratios
+    // THRESHOLDS for 8GB RAM (MacBook Pro) - cleanup only above 6GB
     memoryMonitorInterval = setInterval(() => {
       const usage = process.memoryUsage();
       const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
@@ -184,8 +242,8 @@ async function main() {
       // Log memory usage periodically
       logger.debug('Memory check', { heapUsedMB, heapTotalMB, rssMB });
 
-      // EARLY WARNING: At 600MB (30% of 2GB), start proactive cleanup
-      if (rssMB > 600 && rssMB <= 1000) {
+      // EARLY WARNING: At 6GB, start proactive cleanup
+      if (rssMB > 6000 && rssMB <= 6500) {
         logger.info('⚠️ Memory pressure detected, triggering cleanup', { heapUsedMB, rssMB });
 
         // Trigger cleanup on components that support it
@@ -202,8 +260,8 @@ async function main() {
         }
       }
 
-      // HIGH PRESSURE: At 1000MB (50% of 2GB), aggressive cleanup
-      if (rssMB > 1000 && rssMB <= 1400) {
+      // HIGH PRESSURE: At 6.5GB, aggressive cleanup
+      if (rssMB > 6500 && rssMB <= 7000) {
         logger.warn('🚨 HIGH MEMORY PRESSURE - aggressive cleanup', {
           heapUsedMB,
           heapTotalMB,
@@ -228,8 +286,8 @@ async function main() {
         }
       }
 
-      // CRITICAL: At 1400MB+ (70% of 2GB), emergency mode
-      if (rssMB > 1400) {
+      // CRITICAL: At 7GB+, emergency mode
+      if (rssMB > 7000) {
         logger.error('🚨 CRITICAL MEMORY - emergency cleanup', { rssMB });
 
         // Clear cache manager
@@ -537,21 +595,45 @@ async function main() {
     );
     logger.info('✅ Execution Manager initialized');
 
-    // Connect Signal Tracker to Execution Manager
+    // Initialize Paper Trading Engine
+    logger.info('📝 Initializing Paper Trading Engine...');
+    paperTradingEngine = new PaperTradingEngine(connection, priceFeed);
+    // Connect learning scheduler to paper trading engine for trade outcome learning
+    if (learningScheduler) {
+      paperTradingEngine.setLearningScheduler(learningScheduler);
+    }
+    await paperTradingEngine.start();
+    logger.info('✅ Paper Trading Engine started');
+
+    // Connect Signal Tracker to Execution Manager and Paper Trading Engine
     signalTracker.onEntryApproved((decision, signal) => {
       if (process.env.ENABLE_TRADING === 'true' && executionManager) {
+        // Real trading mode
         executionManager.queueBuyOrder(decision, signal).catch(error => {
           logger.error('Failed to queue buy order', { error: error.message });
         });
-      } else {
-        logger.info('📝 Paper trade (trading disabled):', {
-          token: signal.tokenAddress.slice(0, 8),
-          conviction: decision.convictionScore.toFixed(1),
-          positionSize: decision.positionSizePercent.toFixed(2) + '%'
+      } else if (paperTradingEngine) {
+        // Paper trading mode - execute simulated trade
+        paperTradingEngine.executePaperTrade(decision, signal).then(result => {
+          if (result.success) {
+            logger.info('📝 Paper trade executed:', {
+              token: signal.tokenAddress.slice(0, 8),
+              tradeId: result.tradeId,
+              conviction: decision.convictionScore.toFixed(1),
+              positionSize: decision.positionSizePercent.toFixed(2) + '%'
+            });
+          } else {
+            logger.warn('📝 Paper trade rejected:', {
+              token: signal.tokenAddress.slice(0, 8),
+              reason: result.message
+            });
+          }
+        }).catch(error => {
+          logger.error('Paper trade error', { error: error.message });
         });
       }
     });
-    logger.info('✅ Signal Tracker connected to Execution Manager');
+    logger.info('✅ Signal Tracker connected to Execution Manager and Paper Trading Engine');
 
     logger.info('✅ PHASE 5 COMPLETE');
 
@@ -649,6 +731,7 @@ async function main() {
       learningScheduler,
       alertManager: alertManager!,
       killSwitch: killSwitch!,
+      paperTradingEngine,
       startTime: new Date(),
       isRunning: true,
       isPaused: false,
@@ -793,6 +876,98 @@ async function main() {
     // Keep the process running
     logger.info('Bot is running. Press Ctrl+C to stop.');
 
+    // ============================================================
+    // SELF-HEALING WATCHDOG - Monitor and restart failed components
+    // ============================================================
+    let watchdogInterval: NodeJS.Timeout | undefined;
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 5;
+
+    watchdogInterval = setInterval(async () => {
+      try {
+        // Check critical components
+        const dbHealthy = await dbHealthCheck();
+        const rpcHealthy = await rpcManager.withFailover(async (conn: Connection) => {
+          const slot = await conn.getSlot();
+          return slot > 0;
+        }).catch(() => false);
+
+        if (!dbHealthy || !rpcHealthy) {
+          consecutiveFailures++;
+          logger.warn('⚠️ Watchdog detected unhealthy component', {
+            dbHealthy,
+            rpcHealthy,
+            consecutiveFailures
+          });
+
+          // Attempt to recover DB connection
+          if (!dbHealthy) {
+            try {
+              initializePostgres();
+              logger.info('✅ Database connection recovered');
+            } catch (err: any) {
+              logger.error('Failed to recover database', { error: err.message });
+            }
+          }
+
+          // Attempt to recover RPC connection
+          if (!rpcHealthy) {
+            try {
+              rpcManager.forceFailover?.();
+              logger.info('✅ RPC failover triggered');
+            } catch (err: any) {
+              logger.error('Failed to failover RPC', { error: err.message });
+            }
+          }
+
+          // If too many consecutive failures, trigger restart
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            logger.error('🚨 Too many consecutive failures, triggering restart');
+            if (alertManager) {
+              await alertManager.sendAlert({
+                level: 'HIGH',
+                type: 'SYSTEM_ERROR',
+                message: '🚨 Bot auto-restarting due to persistent failures',
+                timestamp: new Date(),
+              }).catch(() => {});
+            }
+            // Exit with code 1 to trigger PM2 restart
+            process.exit(1);
+          }
+        } else {
+          // Reset counter on healthy check
+          if (consecutiveFailures > 0) {
+            logger.info('✅ Watchdog: All systems recovered');
+          }
+          consecutiveFailures = 0;
+        }
+
+        // Check wallet scanner health (separate from DB/RPC failures)
+        if (process.env.ENABLE_WALLET_SCANNING !== 'false' && walletScanner) {
+          const scannerRunning = walletScanner.isRunning();
+          const lastScan = walletScanner.getLastScanTime();
+          const SEVEN_HOURS = 7 * 60 * 60 * 1000;
+          const scannerStale = lastScan > 0 && (Date.now() - lastScan > SEVEN_HOURS);
+
+          if (!scannerRunning || scannerStale) {
+            const lastScanAgo = lastScan > 0 ? Math.round((Date.now() - lastScan) / 60000) : 'never';
+            logger.warn('⚠️ Wallet scanner unhealthy, restarting...', {
+              isRunning: scannerRunning,
+              lastScanAgo: `${lastScanAgo} min`
+            });
+
+            // Restart the scanner
+            walletScanner.startScanning().catch(err => {
+              logger.error('Failed to restart wallet scanner', { error: err.message });
+            });
+          }
+        }
+      } catch (error: any) {
+        logger.error('Watchdog check failed', { error: error.message });
+        consecutiveFailures++;
+      }
+    }, 60 * 1000); // Check every 60 seconds
+
     // Graceful shutdown handler
     const shutdownHandler = async () => {
       try {
@@ -810,6 +985,10 @@ async function main() {
         if (archivalInterval) {
           clearInterval(archivalInterval);
           archivalInterval = undefined;
+        }
+        if (watchdogInterval) {
+          clearInterval(watchdogInterval);
+          watchdogInterval = undefined;
         }
 
         // Send shutdown alert before stopping alertManager
@@ -863,6 +1042,11 @@ async function main() {
         // Position manager
         if (positionManager) {
           positionManager.stop();
+        }
+
+        // Paper trading engine
+        if (paperTradingEngine) {
+          paperTradingEngine.stop();
         }
 
         // Alert system (stop intervals after sending final alert)

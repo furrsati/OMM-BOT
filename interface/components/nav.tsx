@@ -9,7 +9,8 @@ import {
   Target,
   Scan,
   Bot,
-  Activity
+  Activity,
+  Terminal
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -17,6 +18,7 @@ const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/positions', label: 'Positions', icon: Target },
   { href: '/trades', label: 'Trades', icon: TrendingUp },
+  { href: '/paper-trading', label: 'Paper Trading', icon: Terminal },
   { href: '/wallets', label: 'Wallets', icon: Wallet },
   { href: '/scanner', label: 'Scanner', icon: Scan },
   { href: '/logs', label: 'Logs', icon: Activity },

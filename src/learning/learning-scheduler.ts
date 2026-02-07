@@ -72,6 +72,9 @@ export class LearningScheduler {
     this.isActive = true;
     logger.info('▶️ Starting Learning Scheduler');
 
+    // Ensure initial learning snapshot exists (baseline for learning)
+    await this.ensureInitialSnapshot();
+
     // Check immediately on start
     await this.checkAndRunCycles();
 
@@ -81,6 +84,57 @@ export class LearningScheduler {
     }, 5 * 60 * 1000); // 5 minutes
 
     logger.info('✅ Learning Scheduler started (checking every 5 minutes)');
+  }
+
+  /**
+   * Ensure an initial learning snapshot exists
+   * This creates the baseline weights that the learning engine will adjust from
+   */
+  private async ensureInitialSnapshot(): Promise<void> {
+    try {
+      // Check if any snapshot exists
+      const result = await db.query<{ count: string }>(`
+        SELECT COUNT(*) as count FROM learning_snapshots
+      `);
+
+      const snapshotCount = parseInt(result.rows[0]?.count || '0');
+
+      if (snapshotCount === 0) {
+        logger.info('📸 Creating initial learning snapshot (baseline)...');
+
+        // Default weights from CLAUDE.MD
+        const defaultWeights = {
+          smartWallet: 30,
+          tokenSafety: 25,
+          marketConditions: 15,
+          socialSignals: 10,
+          entryQuality: 20
+        };
+
+        // Default parameters
+        const defaultParams = {
+          dipEntryMin: 20,
+          dipEntryMax: 30,
+          stopLossPercent: 25,
+          earlyDiscoveryStopLoss: 15,
+          trailingStopPercent: 15,
+          timeBasedStopHours: 4,
+          smartWalletThreshold: 2
+        };
+
+        await db.query(`
+          INSERT INTO learning_snapshots (
+            version, weights, parameters, trade_count, win_rate, profit_factor, created_at
+          ) VALUES (1, $1, $2, 0, 0, 0, NOW())
+        `, [JSON.stringify(defaultWeights), JSON.stringify(defaultParams)]);
+
+        logger.info('✅ Initial learning snapshot created', { weights: defaultWeights });
+      } else {
+        logger.debug('Learning snapshot already exists', { count: snapshotCount });
+      }
+    } catch (error: any) {
+      logger.error('Error ensuring initial snapshot', { error: error.message });
+    }
   }
 
   /**
@@ -154,10 +208,11 @@ export class LearningScheduler {
       const totalTrades = await this.getTotalCompletedTrades();
 
       // Don't run cycles if insufficient data
-      if (totalTrades < 30) {
+      // REDUCED from 30 to 10 to allow faster learning
+      if (totalTrades < 10) {
         logger.debug('Skipping learning cycles (insufficient data)', {
           trades: totalTrades,
-          required: 30
+          required: 10
         });
         return;
       }
@@ -169,8 +224,8 @@ export class LearningScheduler {
 
       this.lastProcessedTradeCount = totalTrades;
 
-      // Every 50 trades: Weight optimization + Parameter tuning
-      if (totalTrades >= 50 && totalTrades % 50 === 0) {
+      // Every 20 trades: Weight optimization + Parameter tuning (reduced from 50 for faster learning)
+      if (totalTrades >= 20 && totalTrades % 20 === 0) {
         const cycleKey = `weight_param_${totalTrades}`;
         if (!this.cyclesRun.has(cycleKey)) {
           await this.runWeightOptimization(totalTrades);
@@ -179,8 +234,8 @@ export class LearningScheduler {
         }
       }
 
-      // Every 100 trades: Meta-learning review
-      if (totalTrades >= 100 && totalTrades % 100 === 0) {
+      // Every 50 trades: Meta-learning review (reduced from 100)
+      if (totalTrades >= 50 && totalTrades % 50 === 0) {
         const cycleKey = `meta_${totalTrades}`;
         if (!this.cyclesRun.has(cycleKey)) {
           await this.runMetaLearningReview(totalTrades);
@@ -188,8 +243,8 @@ export class LearningScheduler {
         }
       }
 
-      // Every 200 trades: Full report
-      if (totalTrades >= 200 && totalTrades % 200 === 0) {
+      // Every 100 trades: Full report (reduced from 200)
+      if (totalTrades >= 100 && totalTrades % 100 === 0) {
         const cycleKey = `report_${totalTrades}`;
         if (!this.cyclesRun.has(cycleKey)) {
           await this.generateFullReport(totalTrades);

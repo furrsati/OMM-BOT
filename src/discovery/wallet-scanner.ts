@@ -55,12 +55,47 @@ export class WalletScanner {
   private scanningActive: boolean = false;
   private performanceUpdateInterval: NodeJS.Timeout | null = null;
 
+  // Health tracking for watchdog monitoring
+  private lastScanTime: number = 0;
+  private consecutiveScanFailures: number = 0;
+  private dryCycleCount: number = 0; // Tracks cycles with no new wallets found
+
   constructor(connection: Connection) {
     this.connection = connection;
   }
 
   /**
+   * Check if scanner is actively running
+   */
+  isRunning(): boolean {
+    return this.scanningActive;
+  }
+
+  /**
+   * Get timestamp of last successful scan
+   */
+  getLastScanTime(): number {
+    return this.lastScanTime;
+  }
+
+  /**
+   * Get dynamic scan interval based on discovery rate
+   * Returns 2 hours if no wallets found for 2+ cycles, otherwise 6 hours
+   */
+  private getScanInterval(): number {
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+
+    if (this.dryCycleCount >= 2) {
+      logger.info(`📊 Dry spell detected (${this.dryCycleCount} cycles without new wallets) - using 2h interval`);
+      return TWO_HOURS;
+    }
+    return SIX_HOURS;
+  }
+
+  /**
    * Start continuous scanning for winning tokens and their early buyers
+   * Self-healing: auto-restarts on failure with exponential backoff
    */
   async startScanning(): Promise<void> {
     if (this.scanningActive) {
@@ -69,27 +104,55 @@ export class WalletScanner {
     }
 
     this.scanningActive = true;
+    this.consecutiveScanFailures = 0;
     logger.info('🔍 Starting wallet scanner...');
-
-    // Run scan every 6 hours
-    const scanInterval = 6 * 60 * 60 * 1000; // 6 hours
 
     // Start performance update loop (runs every 30 minutes)
     this.startPerformanceUpdateLoop();
 
     while (this.scanningActive) {
       try {
-        await this.runScanCycle();
+        // Track scan time for health monitoring
+        this.lastScanTime = Date.now();
+
+        const newWalletsFound = await this.runScanCycle();
+
+        // Track dry cycles for adaptive interval
+        if (newWalletsFound > 0) {
+          this.dryCycleCount = 0;
+          logger.info(`✅ Scan cycle found ${newWalletsFound} new alpha wallets`);
+        } else {
+          this.dryCycleCount++;
+          logger.info(`📊 Scan cycle complete - no new wallets (dry cycle ${this.dryCycleCount})`);
+        }
+
+        // Reset failure counter on success
+        this.consecutiveScanFailures = 0;
 
         // CRITICAL: Force memory cleanup between cycles
-        // Without this, 4-10MB accumulates per cycle and is never freed
         this.cleanup();
 
+        // Use adaptive interval (2h if dry, 6h normally)
+        const scanInterval = this.getScanInterval();
+        logger.info(`⏰ Next wallet scan in ${scanInterval / (60 * 60 * 1000)} hours`);
         await this.sleep(scanInterval);
+
       } catch (error: any) {
-        logger.error('Error in wallet scan cycle', { error: error.message });
-        this.cleanup(); // Also cleanup on error
-        await this.sleep(60000); // Wait 1 minute on error
+        this.consecutiveScanFailures++;
+        logger.error('Wallet scan cycle failed', {
+          error: error.message,
+          failures: this.consecutiveScanFailures
+        });
+
+        this.cleanup();
+
+        // Exponential backoff: 1min, 2min, 4min, 8min, max 15min
+        const backoffMs = Math.min(
+          60000 * Math.pow(2, this.consecutiveScanFailures - 1),
+          15 * 60 * 1000
+        );
+        logger.info(`⏳ Retrying wallet scan in ${Math.round(backoffMs / 60000)} minutes...`);
+        await this.sleep(backoffMs);
       }
     }
   }
@@ -151,10 +214,13 @@ export class WalletScanner {
 
   /**
    * Run a complete scan cycle
+   * @returns Number of new alpha wallets discovered
    */
-  private async runScanCycle(): Promise<void> {
+  private async runScanCycle(): Promise<number> {
     logStep(1, 5, 'Starting wallet scan cycle - searching for alpha wallets...');
     logThinking('SCANNER', 'Beginning scan for 5x-50x winning tokens to identify smart wallets');
+
+    let totalAlphaWallets = 0;
 
     try {
       // Step 1: Find winning tokens (5×–50× in last 7 days)
@@ -170,7 +236,7 @@ export class WalletScanner {
 
       if (winningTokens.length === 0) {
         logThinking('SCANNER', 'No winning tokens found in this cycle - will retry later');
-        return;
+        return 0;
       }
 
       // Step 2: For each winning token, find early buyers
@@ -217,6 +283,7 @@ export class WalletScanner {
         // Step 5: Cache alpha wallets for scoring
         logStep(5, 5, `Caching ${alphaBuyers.length} alpha wallets to database...`);
         await this.cacheAlphaWallets(alphaBuyers);
+        totalAlphaWallets += alphaBuyers.length;
 
         logAnalysis('TOKEN_COMPLETE', `Token ${token.address.slice(0, 8)}... analysis complete`, {
           token: token.address.slice(0, 8),
@@ -234,11 +301,13 @@ export class WalletScanner {
       // Without this, winningTokens can accumulate 4-10MB per cycle
       winningTokens.length = 0;
 
-      logThinking('SCANNER', `Scan cycle complete: processed ${tokensToProcess.length} tokens, found ${totalEarlyBuyers} early buyers`, {
+      logThinking('SCANNER', `Scan cycle complete: processed ${tokensToProcess.length} tokens, found ${totalEarlyBuyers} early buyers, ${totalAlphaWallets} alpha wallets`, {
         tokensProcessed: tokensToProcess.length,
         totalEarlyBuyers,
-        nextScanIn: '6 hours'
+        totalAlphaWallets
       });
+
+      return totalAlphaWallets;
 
     } catch (error: any) {
       logger.error('Error in scan cycle', { error: error.message, stack: error.stack });

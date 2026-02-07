@@ -11,6 +11,8 @@ import { logger } from '../utils/logger';
  */
 
 let pool: Pool | null = null;
+let isShuttingDown = false;
+let activeQueries = 0;
 
 /**
  * Initialize PostgreSQL connection pool
@@ -84,7 +86,15 @@ export async function query<T extends import("pg").QueryResultRow = any>(
   text: string,
   params?: any[]
 ): Promise<QueryResult<T>> {
+  // Prevent new queries during shutdown
+  if (isShuttingDown) {
+    const error = new Error('Database pool is shutting down');
+    logger.debug('Query rejected during shutdown', { query: text.substring(0, 50) });
+    throw error;
+  }
+
   const pool = getPool();
+  activeQueries++;
 
   try {
     const start = Date.now();
@@ -105,6 +115,8 @@ export async function query<T extends import("pg").QueryResultRow = any>(
       params: params ? JSON.stringify(params).substring(0, 100) : undefined
     });
     throw error;
+  } finally {
+    activeQueries--;
   }
 }
 
@@ -112,6 +124,9 @@ export async function query<T extends import("pg").QueryResultRow = any>(
  * Get a client from the pool for transaction support
  */
 export async function getClient(): Promise<PoolClient> {
+  if (isShuttingDown) {
+    throw new Error('Database pool is shutting down');
+  }
   const pool = getPool();
   return await pool.connect();
 }
@@ -245,14 +260,39 @@ export async function healthCheck(): Promise<boolean> {
 }
 
 /**
- * Close all connections
+ * Close all connections gracefully
+ * Waits for active queries to complete before closing
  */
 export async function closePool(): Promise<void> {
-  if (pool) {
-    await pool.end();
-    pool = null;
-    logger.info('PostgreSQL connection pool closed');
+  if (!pool) return;
+
+  // Signal shutdown to prevent new queries
+  isShuttingDown = true;
+  logger.info('Database pool shutdown initiated, waiting for active queries...');
+
+  // Wait for active queries to complete (max 10 seconds)
+  const maxWaitTime = 10000;
+  const startTime = Date.now();
+
+  while (activeQueries > 0 && (Date.now() - startTime) < maxWaitTime) {
+    logger.debug(`Waiting for ${activeQueries} active queries to complete...`);
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
+
+  if (activeQueries > 0) {
+    logger.warn(`Closing pool with ${activeQueries} queries still active (timeout reached)`);
+  }
+
+  await pool.end();
+  pool = null;
+  logger.info('PostgreSQL connection pool closed');
+}
+
+/**
+ * Check if the database pool is shutting down
+ */
+export function isPoolShuttingDown(): boolean {
+  return isShuttingDown;
 }
 
 /**
@@ -263,4 +303,5 @@ export const db = {
   getClient,
   transaction,
   getPool,
+  isPoolShuttingDown,
 };

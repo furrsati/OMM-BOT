@@ -15,6 +15,7 @@ import walletRoutes from './wallet.routes';
 import safetyRoutes from './safety.routes';
 import executionRoutes from './execution.routes';
 import scannerRoutes from './scanner.routes';
+import paperTradingRoutes from './paper-trading.routes';
 
 const router = Router();
 
@@ -35,5 +36,6 @@ router.use('/wallet', walletRoutes);
 router.use('/safety', safetyRoutes);
 router.use('/execution', executionRoutes);
 router.use('/scanner', scannerRoutes);
+router.use('/paper-trading', paperTradingRoutes);
 
 export default router;

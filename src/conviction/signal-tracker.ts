@@ -127,12 +127,12 @@ export class SignalTracker {
       });
     }, 120000));
 
-    // Clean up dead tokens every 2 minutes
+    // Clean up dead tokens every 15 minutes (relaxed for local dev with more RAM)
     this.intervals.push(setInterval(() => {
       this.cleanupDeadTokens().catch(error => {
         logger.error('Error cleaning up dead tokens', { error: error.message });
       });
-    }, 2 * 60 * 1000));
+    }, 15 * 60 * 1000));
 
     // Also run initial re-analysis
     this.reanalyzeZeroScoreTokens().catch(error => {
@@ -170,14 +170,16 @@ export class SignalTracker {
    */
   private async scanForOpportunities(): Promise<void> {
     try {
-      logger.debug('Scanning for new opportunities from smart wallets...');
-
       // Get all tracked smart wallets
       const smartWallets = this.walletManager.getWatchlist();
       if (smartWallets.length === 0) {
         logger.warn('No smart wallets to monitor - watchlist is empty');
         return;
       }
+
+      // Log scan activity at info level for visibility
+      const currentStats = this.getStats();
+      logger.info(`🔍 Scanning ${smartWallets.length} smart wallets... (tracking: ${currentStats.watching} watching, ${currentStats.ready} ready)`);
 
       // Track token purchases detected in this scan
       const tokenPurchases: Map<string, {
@@ -275,6 +277,9 @@ export class SignalTracker {
 
       if (tokenPurchases.size > 0) {
         logger.info(`✅ Scan complete: ${tokenPurchases.size} new opportunities detected`);
+      } else {
+        // Log at debug level when no new tokens found (expected most of the time)
+        logger.debug(`Scan complete: No new wallet purchases found in last 60 min`);
       }
 
     } catch (error: any) {
@@ -589,12 +594,24 @@ export class SignalTracker {
         // ============================================================
 
         // Check 1: Liquidity dropped below minimum
-        if (priceData.liquidityUSD !== undefined && priceData.liquidityUSD < 5000) {
+        // IMPORTANT: Skip this check for new tokens (< 10 min old) because:
+        // - Pump.fun tokens often show $0 liquidity initially
+        // - DexScreener needs time to index new pairs
+        // - We should give new tokens time to develop liquidity data
+        const isNewToken = tokenAgeMinutes < 10;
+        const hasValidLiquidity = priceData.liquidityUSD !== undefined && priceData.liquidityUSD > 0;
+
+        if (!isNewToken && hasValidLiquidity && priceData.liquidityUSD < 1000) {
+          // Only remove OLDER tokens with confirmed low liquidity (< $1K)
+          // Reduced from $5K to $1K since pump.fun tokens start with low liquidity
           logger.info(`💀 ${tokenAddress.slice(0, 8)}... liquidity dropped to $${priceData.liquidityUSD.toFixed(0)} - removing`);
           opportunity.status = 'EXPIRED';
           await this.updateOpportunityStatus(tokenAddress, 'REJECTED', `Liquidity dropped to $${priceData.liquidityUSD.toFixed(0)}`);
           this.trackedOpportunities.delete(tokenAddress);
           continue;
+        } else if (isNewToken && priceData.liquidityUSD === 0) {
+          // For new tokens with $0 liquidity, just log but don't remove yet
+          logger.debug(`⏳ ${tokenAddress.slice(0, 8)}... new token with $0 liquidity (${tokenAgeMinutes.toFixed(1)} min old) - waiting for data`);
         }
 
         // Check 2: Price collapsed > 80% (faster than cleanup interval)
@@ -986,12 +1003,12 @@ export class SignalTracker {
         AND is_honeypot = false
         AND (has_mint_authority = false OR has_mint_authority IS NULL)
         AND (
-          -- Must have good safety score OR be very new
-          (safety_score >= 40) OR (discovered_at > NOW() - INTERVAL '30 minutes')
+          -- Must have reasonable safety score OR be new (relaxed for learning)
+          (safety_score >= 25) OR (discovered_at > NOW() - INTERVAL '1 hour')
         )
         AND (
-          -- Must have decent conviction OR be very new
-          (conviction_score >= 30) OR (discovered_at > NOW() - INTERVAL '30 minutes')
+          -- Must have some conviction OR be new (relaxed for learning)
+          (conviction_score >= 20) OR (discovered_at > NOW() - INTERVAL '1 hour')
         )
         AND (
           -- Must have smart wallet interest OR be very new
@@ -1066,67 +1083,71 @@ export class SignalTracker {
     try {
       logger.info('🧹 Running AGGRESSIVE token cleanup...');
 
-      // 1. Mark tokens with LOW LIQUIDITY as DEAD (threshold raised to $5K)
+      // 1. Mark tokens with LOW LIQUIDITY as DEAD
+      // RELAXED: Only check tokens older than 1 hour (pump.fun tokens need time to develop)
+      // Also skip tokens where liquidity is NULL (no data yet from DexScreener)
       const deadLiquidity = await query(`
         UPDATE token_opportunities
-        SET status = 'REJECTED', rejection_reason = 'Low liquidity (<$5K)'
+        SET status = 'REJECTED', rejection_reason = 'Low liquidity (<$500)'
         WHERE status IN ('ANALYZING', 'WATCHING', 'QUALIFIED')
-        AND (liquidity_usd IS NULL OR liquidity_usd < 5000)
-        AND discovered_at < NOW() - INTERVAL '10 minutes'
+        AND liquidity_usd IS NOT NULL
+        AND liquidity_usd > 0
+        AND liquidity_usd < 500
+        AND discovered_at < NOW() - INTERVAL '1 hour'
       `);
 
-      // 2. Mark tokens with LOW SAFETY SCORE as DEAD
+      // 2. Mark tokens with LOW SAFETY SCORE as DEAD (reduced threshold for learning)
       const deadSafety = await query(`
         UPDATE token_opportunities
-        SET status = 'REJECTED', rejection_reason = 'Low safety score (<40)'
+        SET status = 'REJECTED', rejection_reason = 'Low safety score (<30)'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND safety_score IS NOT NULL
-        AND safety_score < 40
-        AND discovered_at < NOW() - INTERVAL '10 minutes'
+        AND safety_score < 30
+        AND discovered_at < NOW() - INTERVAL '1 hour'
       `);
 
-      // 3. Mark tokens with LOW CONVICTION SCORE as DEAD (after 20 min to analyze)
+      // 3. Mark tokens with LOW CONVICTION SCORE as DEAD (after 1 hour to allow full analysis)
       const deadConviction = await query(`
         UPDATE token_opportunities
-        SET status = 'REJECTED', rejection_reason = 'Low conviction score (<30)'
+        SET status = 'REJECTED', rejection_reason = 'Low conviction score (<25)'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND conviction_score IS NOT NULL
-        AND conviction_score < 30
-        AND discovered_at < NOW() - INTERVAL '20 minutes'
+        AND conviction_score < 25
+        AND discovered_at < NOW() - INTERVAL '1 hour'
       `);
 
-      // 4. Mark tokens with NO SMART WALLET INTEREST as DEAD
+      // 4. Mark tokens with NO SMART WALLET INTEREST as DEAD (after 45 min to allow discovery)
       const deadNoWallets = await query(`
         UPDATE token_opportunities
         SET status = 'REJECTED', rejection_reason = 'No smart wallet interest'
         WHERE status IN ('ANALYZING', 'WATCHING')
         AND (smart_wallet_count IS NULL OR smart_wallet_count = 0)
-        AND discovered_at < NOW() - INTERVAL '15 minutes'
+        AND discovered_at < NOW() - INTERVAL '45 minutes'
       `);
 
       // 5. Mark tokens with STALE DATA as EXPIRED
       const staleData = await query(`
         UPDATE token_opportunities
-        SET status = 'EXPIRED', rejection_reason = 'Stale data (>30min without update)'
+        SET status = 'EXPIRED', rejection_reason = 'Stale data (>2h without update)'
         WHERE status IN ('ANALYZING', 'WATCHING')
-        AND last_updated < NOW() - INTERVAL '30 minutes'
+        AND last_updated < NOW() - INTERVAL '2 hours'
       `);
 
-      // 6. Mark tokens with NO VOLUME as DEAD
+      // 6. Mark tokens with NO VOLUME as DEAD (after 1 hour to allow market development)
       const deadNoVolume = await query(`
         UPDATE token_opportunities
-        SET status = 'REJECTED', rejection_reason = 'No trading volume (<$1K)'
+        SET status = 'REJECTED', rejection_reason = 'No trading volume (<$500)'
         WHERE status IN ('ANALYZING', 'WATCHING')
-        AND (volume_24h IS NULL OR volume_24h < 1000)
-        AND discovered_at < NOW() - INTERVAL '20 minutes'
+        AND (volume_24h IS NULL OR volume_24h < 500)
+        AND discovered_at < NOW() - INTERVAL '1 hour'
       `);
 
-      // 7. Mark old ANALYZING tokens as EXPIRED (30 min timeout)
+      // 7. Mark old ANALYZING tokens as EXPIRED (2 hour timeout)
       const expiredAnalyzing = await query(`
         UPDATE token_opportunities
         SET status = 'EXPIRED', rejection_reason = 'Analysis timeout'
         WHERE status = 'ANALYZING'
-        AND discovered_at < NOW() - INTERVAL '30 minutes'
+        AND discovered_at < NOW() - INTERVAL '2 hours'
       `);
 
       // 8. Mark tokens where PRICE COLLAPSED (>90%) as DEAD
@@ -1246,8 +1267,8 @@ export class SignalTracker {
       const currentCount = parseInt(activeCount.rows[0]?.count || '0');
       logger.info(`📊 Active opportunities remaining: ${currentCount}`);
 
-      // HARD CAP ENFORCEMENT: Keep only top 30 tokens by conviction score
-      const MAX_TOKENS = 30;
+      // HARD CAP ENFORCEMENT: Keep only top 50 tokens by conviction score (increased for learning)
+      const MAX_TOKENS = 50;
       if (currentCount > MAX_TOKENS) {
         const excessCount = currentCount - MAX_TOKENS;
         logger.warn(`🚨 Token cap exceeded (${currentCount}/${MAX_TOKENS}) - removing ${excessCount} lowest scoring tokens`);

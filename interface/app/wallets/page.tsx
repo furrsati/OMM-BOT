@@ -15,7 +15,7 @@ import {
   TableHead,
   TableCell,
 } from '@/components/ui/table'
-import { formatAddress, formatNumber, formatPercent, timeAgo } from '@/lib/utils'
+import { formatAddress, formatNumber, timeAgo } from '@/lib/utils'
 import { Wallet, Plus, Trash2, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 

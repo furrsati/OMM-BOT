@@ -18,7 +18,7 @@ import { Connection } from '@solana/web3.js';
 import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger';
 import { SmartWallet } from '../types';
-import { query } from '../db/postgres';
+import { query, isPoolShuttingDown } from '../db/postgres';
 
 interface WalletPerformance {
   address: string;
@@ -58,15 +58,24 @@ export class WalletScorer {
       const scoredWallets: SmartWallet[] = [];
 
       for (const walletAddress of alphaWallets) {
+        // Abort early during shutdown
+        if (isPoolShuttingDown()) {
+          logger.info('Wallet scoring aborted due to shutdown');
+          break;
+        }
+
         try {
           const scored = await this.scoreWallet(walletAddress);
           if (scored) {
             scoredWallets.push(scored);
           }
         } catch (error: any) {
-          logger.error(`Error scoring wallet ${walletAddress.slice(0, 8)}...`, {
-            error: error.message
-          });
+          // Ignore shutdown errors, log others
+          if (!error.message?.includes('shutting down')) {
+            logger.error(`Error scoring wallet ${walletAddress.slice(0, 8)}...`, {
+              error: error.message
+            });
+          }
         }
       }
 

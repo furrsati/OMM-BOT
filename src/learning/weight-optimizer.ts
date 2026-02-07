@@ -58,7 +58,7 @@ export class WeightOptimizer {
   private readonly MIN_WEIGHT = 5;
   private readonly MAX_WEIGHT = 40;
   private readonly MAX_ADJUSTMENT_PER_CYCLE = 5;
-  private readonly MIN_TRADES_FOR_ADJUSTMENT = 30;
+  private readonly MIN_TRADES_FOR_ADJUSTMENT = 10; // Reduced from 30 for faster learning
   private readonly STATISTICAL_SIGNIFICANCE_THRESHOLD = 0.1; // p-value
 
   /**
