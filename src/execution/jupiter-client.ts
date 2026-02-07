@@ -67,7 +67,8 @@ export class JupiterClient {
   private readonly MAX_CACHE_SIZE = 20; // Reduced for 512MB instances
 
   constructor() {
-    this.baseUrl = process.env.JUPITER_API_URL || 'https://quote-api.jup.ag/v6';
+    // Jupiter deprecated quote-api.jup.ag - now using lite-api.jup.ag
+    this.baseUrl = process.env.JUPITER_API_URL || 'https://lite-api.jup.ag/swap/v1';
 
     this.client = axios.create({
       baseURL: this.baseUrl,
